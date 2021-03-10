@@ -19,7 +19,7 @@ pub struct ModVersion {
 }
 
 impl ModVersion {
-    fn get() -> Option<Self> {
+    pub fn get() -> Option<Self> {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"(?P<maj>[0-9]+)\.(?P<min>[0-9]+)\.(?P<pat>[0-9]+)")
                 .unwrap();
