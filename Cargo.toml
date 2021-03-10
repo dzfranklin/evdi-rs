@@ -1,0 +1,10 @@
+[package]
+name = "evdi"
+version = "0.1.0"
+authors = ["Daniel Franklin <daniel@danielzfranklin.org>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+evdi-sys = "0.1.1"
