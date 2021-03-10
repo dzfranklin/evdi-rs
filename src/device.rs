@@ -21,7 +21,7 @@ impl Device {
     /// Returns a device if one is available.
     ///
     /// If no device is available you will need to run Device::add() with superuser permissions.
-    pub fn get() -> Option<Device> {
+    pub fn get() -> Option<Self> {
         if let Ok(mut devices) = Self::list_available() {
             devices.pop()
         } else {
@@ -41,7 +41,7 @@ impl Device {
     }
 
     /// List all devices that have available status in a stable order
-    pub fn list_available() -> io::Result<Vec<Device>> {
+    pub fn list_available() -> io::Result<Vec<Self>> {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"^card([0-9]+)$").unwrap();
         }
@@ -96,7 +96,7 @@ impl Device {
     /// Create a struct representing /dev/dri/card{id}.
     ///
     /// This does not create the device or check if the device exists.
-    pub fn new(id: i32) -> Device {
+    pub fn new(id: i32) -> Self {
         Device { id }
     }
 }
@@ -125,7 +125,7 @@ impl DeviceStatus {
     /// * `sys` - evdi_device_status
     ///
     /// Panics on unrecognized sys.
-    fn from(sys: c_uint) -> DeviceStatus {
+    fn from(sys: c_uint) -> Self {
         match sys {
             EVDI_STATUS_AVAILABLE => DeviceStatus::Available,
             EVDI_STATUS_UNRECOGNIZED => DeviceStatus::Unrecognized,

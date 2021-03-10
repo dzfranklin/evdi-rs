@@ -19,7 +19,7 @@ pub struct ModVersion {
 }
 
 impl ModVersion {
-    fn get() -> Option<ModVersion> {
+    fn get() -> Option<Self> {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"(?P<maj>[0-9]+)\.(?P<min>[0-9]+)\.(?P<pat>[0-9]+)")
                 .unwrap();
@@ -34,7 +34,7 @@ impl ModVersion {
         let minor = caps.name("min")?.as_str().parse().map_err(|_| NoneError)?;
         let patch = caps.name("pat")?.as_str().parse().map_err(|_| NoneError)?;
 
-        Some(ModVersion { major, minor, patch })
+        Some(Self { major, minor, patch })
     }
 }
 
@@ -49,7 +49,7 @@ impl LibVersion {
     /// Get the version of the EVDI library linked against (not the kernel module).
     ///
     /// Uses semver. See <https://displaylink.github.io/evdi/details/#versioning>
-    pub fn get() -> LibVersion {
+    pub fn get() -> Self {
         let sys = unsafe {
             let mut out = evdi_lib_version {
                 version_major: -1,
@@ -74,8 +74,8 @@ impl LibVersion {
         version
     }
 
-    fn new(sys: &evdi_lib_version) -> LibVersion {
-        LibVersion {
+    fn new(sys: &evdi_lib_version) -> Self {
+        Self {
             major: sys.version_major,
             minor: sys.version_minor,
             patch: sys.version_patchlevel,
