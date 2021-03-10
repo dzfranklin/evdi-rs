@@ -8,3 +8,6 @@ edition = "2018"
 
 [dependencies]
 evdi-sys = "0.1.1"
+regex = "1.4.3"
+lazy_static = "1.4.0"
+thiserror = "1.0.24"

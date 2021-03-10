@@ -1,3 +1,7 @@
+#![feature(with_options)]
+
+pub mod device;
+
 use evdi_sys::*;
 
 pub struct LibVersion {
