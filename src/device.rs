@@ -1,12 +1,14 @@
 use std::{fs, io};
+use std::cmp::Ordering;
+use std::fs::File;
+use std::io::Write;
 use std::os::raw::c_uint;
 
 use evdi_sys::*;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::fs::File;
-use std::io::Write;
-use std::cmp::Ordering;
+
+use crate::handle::UnconnectedHandle;
 
 const DEVICE_CARDS_DIR: &str = "/dev/dri";
 const REMOVE_ALL_FILE: &str = "/sys/devices/evdi/remove_all";
@@ -36,9 +38,9 @@ impl Device {
     }
 
     /// Open a device.
-    pub fn open(&self) {
-        // TODO: Replace this noop with actual implementation
-        unsafe { evdi_open(self.id) };
+    pub fn open(&self) -> UnconnectedHandle {
+        let sys = unsafe { evdi_open(self.id) };
+        UnconnectedHandle::new(sys)
     }
 
     /// List all devices that have available status in a stable order
@@ -174,5 +176,11 @@ mod tests {
     fn get_returns_a_device() {
         let result = Device::get();
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn can_open() {
+        let device = Device::get().unwrap();
+        device.open();
     }
 }

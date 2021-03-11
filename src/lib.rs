@@ -12,6 +12,8 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 pub mod device;
+pub mod handle;
+pub mod device_config;
 
 /// Set a callback to receive log messages, instead of having them written to stdout.
 ///
