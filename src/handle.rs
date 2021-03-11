@@ -251,8 +251,8 @@ impl BufferID {
 pub struct Buffer {
     pub id: BufferID,
     version: u32,
-    buffer: Pin<Box<Vec<u8>>>,
-    rects: Pin<Box<Vec<evdi_rect>>>,
+    buffer: Box<[u8]>,
+    rects: Box<[evdi_rect]>,
     num_rects: i32,
     width: usize,
     height: usize,
@@ -274,8 +274,9 @@ impl Buffer {
         let bits_per_pixel = mode.bits_per_pixel as usize;
         let stride = bits_per_pixel / 8 * width;
 
-        let buffer = Box::pin(vec![0u8; height * stride]);
-        let rects = Box::pin(vec![
+        // NOTE: We use a boxed slice to prevent accidental re-allocation
+        let buffer = vec![0u8; height * stride].into_boxed_slice();
+        let rects = vec![
             evdi_rect {
                 x1: 0,
                 y1: 0,
@@ -283,7 +284,8 @@ impl Buffer {
                 y2: 0,
             };
             MAX_RECTS_BUFFER_LEN
-        ]);
+        ]
+        .into_boxed_slice();
 
         let buf = Buffer {
             id,
