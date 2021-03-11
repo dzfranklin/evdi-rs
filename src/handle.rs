@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::io::Write;
@@ -6,7 +7,6 @@ use std::os::raw::{c_int, c_uint, c_void};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
-use chashmap::CHashMap;
 use evdi_sys::*;
 use filedescriptor::{poll, pollfd, POLLIN};
 use thiserror::Error;
@@ -21,7 +21,7 @@ pub struct Handle {
     handle: evdi_handle,
     device_config: DeviceConfig,
     // NOTE: Not cleaned up on buffer deregister
-    registered_update_ready_senders: CHashMap<BufferId, Sender<()>>,
+    registered_update_ready_senders: HashMap<BufferId, Sender<()>>,
     mode: Receiver<evdi_mode>,
     mode_sender: Sender<evdi_mode>,
 }
@@ -198,7 +198,7 @@ impl Handle {
         Self {
             handle: handle_sys,
             device_config,
-            registered_update_ready_senders: CHashMap::new(),
+            registered_update_ready_senders: HashMap::new(),
             mode,
             mode_sender,
         }
