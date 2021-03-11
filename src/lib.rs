@@ -12,8 +12,8 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 pub mod device;
-pub mod handle;
 pub mod device_config;
+pub mod handle;
 
 /// Check the status of the evdi kernel module for compatibility with this library version.
 ///
@@ -59,7 +59,10 @@ pub enum KernelModStatus {
 /// # use evdi::set_logging;
 /// set_logging(|msg| println!("{}", msg));
 /// ```
-pub fn set_logging<F>(cb: F) where F: Fn(String) {
+pub fn set_logging<F>(cb: F)
+where
+    F: Fn(String),
+{
     unsafe {
         wrapper_evdi_set_logging(wrapper_log_cb {
             function: Some(logging_cb_caller::<F>),
@@ -85,8 +88,8 @@ pub struct KernelModVersion {
 impl KernelModVersion {
     pub fn get() -> Option<Self> {
         lazy_static! {
-            static ref RE: Regex = Regex::new(r"(?P<maj>[0-9]+)\.(?P<min>[0-9]+)\.(?P<pat>[0-9]+)")
-                .unwrap();
+            static ref RE: Regex =
+                Regex::new(r"(?P<maj>[0-9]+)\.(?P<min>[0-9]+)\.(?P<pat>[0-9]+)").unwrap();
         }
         let mut file = File::open(MOD_VERSION_FILE).map_err(|_| NoneError)?;
         let mut contents = String::new();
@@ -98,7 +101,11 @@ impl KernelModVersion {
         let minor = caps.name("min")?.as_str().parse().map_err(|_| NoneError)?;
         let patch = caps.name("pat")?.as_str().parse().map_err(|_| NoneError)?;
 
-        Some(Self { major, minor, patch })
+        Some(Self {
+            major,
+            minor,
+            patch,
+        })
     }
 }
 
@@ -160,8 +167,8 @@ impl LibVersion {
 mod tests {
     use std::sync::mpsc::channel;
 
-    use crate::*;
     use crate::device::Device;
+    use crate::*;
 
     #[test]
     fn cb_to_set_logging_receives_multiple_msgs() {

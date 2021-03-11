@@ -1,8 +1,8 @@
-use std::{fs, io};
 use std::cmp::Ordering;
 use std::fs::File;
 use std::io::Write;
 use std::os::raw::c_uint;
+use std::{fs, io};
 
 use evdi_sys::*;
 use lazy_static::lazy_static;
@@ -54,7 +54,8 @@ impl Device {
         for entry in fs::read_dir(DEVICE_CARDS_DIR)? {
             let name_os = entry?.file_name();
             let name = name_os.to_string_lossy();
-            let id = RE.captures(&name)
+            let id = RE
+                .captures(&name)
                 .and_then(|caps| caps.get(1))
                 .and_then(|id| id.as_str().parse::<i32>().ok());
 
@@ -89,9 +90,7 @@ impl Device {
     ///
     /// Requires superuser permissions.
     pub fn remove_all() -> io::Result<()> {
-        let mut f = File::with_options()
-            .write(true)
-            .open(REMOVE_ALL_FILE)?;
+        let mut f = File::with_options().write(true).open(REMOVE_ALL_FILE)?;
         f.write("1".as_ref())?;
         Ok(())
     }
@@ -133,7 +132,7 @@ impl DeviceStatus {
             EVDI_STATUS_AVAILABLE => DeviceStatus::Available,
             EVDI_STATUS_UNRECOGNIZED => DeviceStatus::Unrecognized,
             EVDI_STATUS_NOT_PRESENT => DeviceStatus::NotPresent,
-            _ => panic!("Invalid device status {}", sys)
+            _ => panic!("Invalid device status {}", sys),
         }
     }
 }

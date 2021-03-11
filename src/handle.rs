@@ -43,7 +43,11 @@ impl Handle {
     /// handle.request_update(&mut buf, timeout).unwrap();
     /// assert!(buf.dirty_rects().len() > 0);
     /// ```
-    pub fn request_update(&mut self, buffer: &mut Buffer, timeout: Duration) -> Result<(), RecvTimeoutError> {
+    pub fn request_update(
+        &mut self,
+        buffer: &mut Buffer,
+        timeout: Duration,
+    ) -> Result<(), RecvTimeoutError> {
         // NOTE: We need to take &mut self to ensure we can't be called concurrently. This is
         //  required because evdi_grab_pixels grabs from the most recently updated buffer.
         //
@@ -55,7 +59,6 @@ impl Handle {
 
         let update_ready = self.ensure_registered_and_get_update_ready_receiver(&buffer);
         buffer.mark_updated();
-
 
         let ready = unsafe { evdi_request_update(handle_sys, id_sys) };
         if !ready {
@@ -88,9 +91,13 @@ impl Handle {
     }
 
     /// Idempotently ensure a buffer is registered.
-    fn ensure_registered_and_get_update_ready_receiver(&mut self, buffer: &Buffer) -> &Receiver<()> {
+    fn ensure_registered_and_get_update_ready_receiver(
+        &mut self,
+        buffer: &Buffer,
+    ) -> &Receiver<()> {
         let handle_sys = self.handle;
-        let (_, recv) = self.registered_buffers
+        let (_, recv) = self
+            .registered_buffers
             .entry(buffer.id.clone())
             .or_insert_with(|| {
                 unsafe { evdi_register_buffer(handle_sys, buffer.sys()) };
@@ -100,7 +107,9 @@ impl Handle {
     }
 
     pub fn enable_cursor_events(&self, enable: bool) {
-        unsafe { evdi_enable_cursor_events(self.handle, enable); }
+        unsafe {
+            evdi_enable_cursor_events(self.handle, enable);
+        }
     }
 
     /// Ask the kernel module to send us some events.
@@ -161,7 +170,10 @@ impl Handle {
     extern "C" fn mode_changed_handler_caller(mode: evdi_mode, user_data: *mut c_void) {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
         if let Err(err) = handle.mode_sender.send(mode) {
-            eprintln!("Dropping msg. Mode change receiver closed, but callback called: {:?}", err);
+            eprintln!(
+                "Dropping msg. Mode change receiver closed, but callback called: {:?}",
+                err
+            );
         }
     }
 
@@ -170,16 +182,20 @@ impl Handle {
 
         let id = BufferID(buf);
 
-        let send = handle.registered_buffers
-            .get(&id)
-            .map(|(send, _)| send);
+        let send = handle.registered_buffers.get(&id).map(|(send, _)| send);
 
         if let Some(send) = send {
             if let Err(err) = send.send(()) {
-                eprintln!("Dropping msg. Update ready receiver closed, but callback called: {:?}", err);
+                eprintln!(
+                    "Dropping msg. Update ready receiver closed, but callback called: {:?}",
+                    err
+                );
             }
         } else {
-            eprintln!("Dropping msg. No update ready channel for buffer {:?}, but callback called", id);
+            eprintln!(
+                "Dropping msg. No update ready channel for buffer {:?}, but callback called",
+                id
+            );
         }
     }
 
@@ -192,9 +208,14 @@ impl Handle {
     fn new(handle: evdi_handle, device_config: DeviceConfig, ready_timeout: Duration) -> Self {
         let poll_fd = unsafe { evdi_get_event_ready(handle) };
         poll(
-            &mut [pollfd { fd: poll_fd, events: POLLIN, revents: 0 }],
+            &mut [pollfd {
+                fd: poll_fd,
+                events: POLLIN,
+                revents: 0,
+            }],
             Some(ready_timeout),
-        ).unwrap();
+        )
+        .unwrap();
 
         let (mode_sender, mode) = channel();
 
@@ -254,7 +275,15 @@ impl Buffer {
         let stride = bits_per_pixel / 8 * width;
 
         let buffer = Box::pin(vec![0u8; height * stride]);
-        let rects = Box::pin(vec![evdi_rect { x1: 0, y1: 0, x2: 0, y2: 0 }; MAX_RECTS_BUFFER_LEN]);
+        let rects = Box::pin(vec![
+            evdi_rect {
+                x1: 0,
+                y1: 0,
+                x2: 0,
+                y2: 0,
+            };
+            MAX_RECTS_BUFFER_LEN
+        ]);
 
         let buf = Buffer {
             id,
@@ -348,13 +377,18 @@ impl<'a> DirtyRect<'a> {
     ///
     /// This is useful when debugging, as you can open the file in an image viewer and see if the
     /// buffer is processed correctly.
-    /// 
+    ///
     /// The same requirements as [`Self::bytes`] apply.
     ///
     /// [PPM]: http://netpbm.sourceforge.net/doc/ppm.html
     pub fn debug_write_to_ppm(&self, f: &mut File) -> Option<io::Result<()>> {
         if let Some(bytes) = self.bytes() {
-            Some(Self::debug_write_bytes_to_ppm(bytes, self.buf.width, self.buf.height, f))
+            Some(Self::debug_write_bytes_to_ppm(
+                bytes,
+                self.buf.width,
+                self.buf.height,
+                f,
+            ))
         } else {
             None
         }
@@ -391,7 +425,11 @@ impl<'a> DirtyRect<'a> {
     }
 
     fn new(buf: &'a Buffer, i: usize) -> Self {
-        Self { buf, i, version: buf.version }
+        Self {
+            buf,
+            i,
+            version: buf.version,
+        }
     }
 
     fn is_valid(&self) -> bool {
@@ -428,7 +466,7 @@ impl DirtyRectBounds {
 /// Automatically closed on drop
 #[derive(Debug)]
 pub struct UnconnectedHandle {
-    handle: evdi_handle
+    handle: evdi_handle,
 }
 
 impl UnconnectedHandle {
@@ -489,7 +527,8 @@ mod tests {
     const TIMEOUT: Duration = Duration::from_secs(1);
 
     fn connect() -> Handle {
-        Device::get().unwrap()
+        Device::get()
+            .unwrap()
             .open()
             .connect(&DeviceConfig::sample(), TIMEOUT)
     }
@@ -581,7 +620,11 @@ mod tests {
 
         let avg = total / len;
 
-        assert!(avg > 10, "avg byte {:?} < 10, suggesting we aren't correctly grabbing the screen", avg);
+        assert!(
+            avg > 10,
+            "avg byte {:?} < 10, suggesting we aren't correctly grabbing the screen",
+            avg
+        );
     }
 
     #[test]
