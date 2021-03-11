@@ -91,7 +91,7 @@ impl Device {
     /// Requires superuser permissions.
     pub fn remove_all() -> io::Result<()> {
         let mut f = File::with_options().write(true).open(REMOVE_ALL_FILE)?;
-        f.write("1".as_ref())?;
+        f.write_all("1".as_ref())?;
         Ok(())
     }
 
