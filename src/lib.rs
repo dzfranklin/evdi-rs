@@ -16,6 +16,42 @@ pub mod device;
 pub mod handle;
 pub mod device_config;
 
+/// Check the status of the evdi kernel module for compatibility with this library version.
+///
+/// ```
+/// # use evdi::{check_kernel_mod, KernelModStatus};
+/// match check_kernel_mod() {
+///     KernelModStatus::NotInstalled => {
+///         println!("You need to install the evdi kernel module");
+///     }
+///     KernelModStatus::Outdated => {
+///         println!("Your version of the evdi kernel module is too outdated to use with this library version");
+///     }
+///     KernelModStatus::Compatible => {
+///         println!("You have a compatible version of the evdi kernel module installed");
+///     }
+/// }
+/// ```
+pub fn check_kernel_mod() -> KernelModStatus {
+    let mod_version = KernelModVersion::get();
+    if let Some(mod_version) = mod_version {
+        let lib_version = LibVersion::get();
+        if lib_version.is_compatible_with(mod_version) {
+            KernelModStatus::Compatible
+        } else {
+            KernelModStatus::Outdated
+        }
+    } else {
+        KernelModStatus::NotInstalled
+    }
+}
+
+pub enum KernelModStatus {
+    NotInstalled,
+    Outdated,
+    Compatible,
+}
+
 /// Set a callback to receive log messages, instead of having them written to stdout.
 ///
 /// The callback is per-client.
@@ -153,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn installed_kernel_mod_is_compatible() {
+    fn is_compatible_with_works() {
         let mod_version = KernelModVersion::get().unwrap();
         let lib_version = LibVersion::get();
         assert!(lib_version.is_compatible_with(mod_version));
