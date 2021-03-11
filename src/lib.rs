@@ -41,13 +41,13 @@ extern "C" fn logging_cb_caller<F: Fn(String)>(user_data: *mut c_void, msg: *con
 
 const MOD_VERSION_FILE: &str = "/sys/devices/evdi/version";
 
-pub struct ModVersion {
+pub struct KernelModVersion {
     pub major: u32,
     pub minor: u32,
     pub patch: u32,
 }
 
-impl ModVersion {
+impl KernelModVersion {
     pub fn get() -> Option<Self> {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"(?P<maj>[0-9]+)\.(?P<min>[0-9]+)\.(?P<pat>[0-9]+)")
@@ -105,7 +105,7 @@ impl LibVersion {
         version
     }
 
-    pub fn is_compatible_with(&self, other: ModVersion) -> bool {
+    pub fn is_compatible_with(&self, other: KernelModVersion) -> bool {
         // Based on the private function is_evdi_compatible
         other.major == self.compatible_mod_major && other.minor >= self.compatible_mod_minor
     }
@@ -148,13 +148,13 @@ mod tests {
 
     #[test]
     fn get_mod_version_works() {
-        let result = ModVersion::get();
+        let result = KernelModVersion::get();
         assert!(result.is_some())
     }
 
     #[test]
     fn installed_kernel_mod_is_compatible() {
-        let mod_version = ModVersion::get().unwrap();
+        let mod_version = KernelModVersion::get().unwrap();
         let lib_version = LibVersion::get();
         assert!(lib_version.is_compatible_with(mod_version));
     }
