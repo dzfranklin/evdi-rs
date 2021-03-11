@@ -35,9 +35,10 @@ impl Device {
         DeviceStatus::from(sys)
     }
 
-    /// Connect to the device.
-    pub fn connect(&self) -> Handle {
-
+    /// Open a device.
+    pub fn open(&self) {
+        // TODO: Replace this noop with actual implementation
+        unsafe { evdi_open(self.id) };
     }
 
     /// List all devices that have available status in a stable order

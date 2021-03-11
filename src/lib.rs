@@ -1,21 +1,47 @@
 #![feature(with_options)]
 #![feature(try_trait)]
 
-pub mod device;
-
+use std::ffi::CStr;
 use std::fs::File;
 use std::io::Read;
-use regex::Regex;
-use lazy_static::lazy_static;
-use evdi_sys::*;
 use std::option::NoneError;
+use std::os::raw::{c_char, c_void};
+
+use evdi_sys::*;
+use lazy_static::lazy_static;
+use regex::Regex;
+
+pub mod device;
+
+/// Set a callback to receive log messages, instead of having them written to stdout.
+///
+/// The callback is per-client.
+///
+/// ```
+/// # use evdi::set_logging;
+/// set_logging(|msg| println!("{}", msg));
+/// ```
+pub fn set_logging<F>(cb: F) where F: Fn(String) {
+    unsafe {
+        wrapper_evdi_set_logging(wrapper_log_cb {
+            function: Some(logging_cb_caller::<F>),
+            user_data: Box::into_raw(Box::new(cb)) as *mut c_void,
+        });
+    }
+}
+
+extern "C" fn logging_cb_caller<F: Fn(String)>(user_data: *mut c_void, msg: *const c_char) {
+    let msg = unsafe { CStr::from_ptr(msg) }.to_str().unwrap().to_owned();
+    let cb = unsafe { (user_data as *mut F).as_ref().unwrap() };
+    cb(msg);
+}
 
 const MOD_VERSION_FILE: &str = "/sys/devices/evdi/version";
 
 pub struct ModVersion {
     pub major: u32,
     pub minor: u32,
-    pub patch: u32
+    pub patch: u32,
 }
 
 impl ModVersion {
@@ -94,7 +120,23 @@ impl LibVersion {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc::channel;
+
     use crate::*;
+    use crate::device::Device;
+
+    #[test]
+    fn cb_to_set_logging_receives_multiple_msgs() {
+        let (send, recv) = channel();
+
+        set_logging(move |msg| send.send(msg).unwrap());
+
+        Device::get().unwrap().open(); // Generate a log msg
+        recv.recv().unwrap(); // Block until we receive the msg
+
+        Device::get().unwrap().open(); // Generate a log msg
+        recv.recv().unwrap(); // Block until we receive the msg
+    }
 
     #[test]
     fn get_lib_version_works() {
