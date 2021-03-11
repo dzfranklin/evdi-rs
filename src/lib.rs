@@ -109,7 +109,7 @@ impl KernelModVersion {
     }
 }
 
-/// Version of the userspace EVDI library
+/// Version of the userspace evdi library
 pub struct LibVersion {
     pub major: i32,
     pub minor: i32,
@@ -119,7 +119,7 @@ pub struct LibVersion {
 }
 
 impl LibVersion {
-    /// Get the version of the EVDI library linked against (not the kernel module).
+    /// Get the version of the evdi library linked against (not the kernel module).
     ///
     /// Uses semver. See <https://displaylink.github.io/evdi/details/#versioning>
     pub fn get() -> Self {

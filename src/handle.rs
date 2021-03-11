@@ -13,7 +13,7 @@ use thiserror::Error;
 
 use crate::device_config::DeviceConfig;
 
-/// Represents an EVDI handle that is connected and ready.
+/// Represents an evdi handle that is connected and ready.
 ///
 /// Automatically disconnected on drop.
 #[derive(Debug)]
