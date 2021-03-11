@@ -1,17 +1,15 @@
-use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::io::Write;
 use std::mem::forget;
 use std::os::raw::{c_int, c_uint, c_void};
-
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
-use bytes::Bytes;
-use chunked_bytes::ChunkedBytes;
+use chashmap::CHashMap;
 use evdi_sys::*;
 use filedescriptor::{poll, pollfd, POLLIN};
+use thiserror::Error;
 
 use crate::device_config::DeviceConfig;
 
@@ -22,7 +20,8 @@ use crate::device_config::DeviceConfig;
 pub struct Handle {
     handle: evdi_handle,
     device_config: DeviceConfig,
-    registered_buffers: HashMap<BufferId, (Sender<()>, Receiver<()>)>,
+    // NOTE: Not cleaned up on buffer deregister
+    registered_update_ready_senders: CHashMap<BufferId, Sender<()>>,
     mode: Receiver<evdi_mode>,
     mode_sender: Sender<evdi_mode>,
 }
@@ -41,13 +40,12 @@ impl Handle {
     /// # let mode = handle.receive_mode(timeout).unwrap();
     /// let mut buf = Buffer::new(BufferId::new(1), &mode);
     /// handle.request_update(&mut buf, timeout).unwrap();
-    /// assert!(!buf.dirty_rects().is_empty());
     /// ```
     pub fn request_update(
         &mut self,
         buffer: &mut Buffer,
         timeout: Duration,
-    ) -> Result<(), RecvTimeoutError> {
+    ) -> Result<(), RequestUpdateError> {
         // NOTE: We need to take &mut self to ensure we can't be called concurrently. This is
         //  required because evdi_grab_pixels grabs from the most recently updated buffer.
         //
@@ -57,13 +55,21 @@ impl Handle {
         let handle_sys = self.handle;
         let id_sys = buffer.id.0;
 
-        let update_ready = self.ensure_registered_and_get_update_ready_receiver(&buffer);
-        buffer.mark_updated();
+        if let Some(sys) = buffer.attached_to {
+            if sys != self.handle {
+                return Err(RequestUpdateError::BufferAttachedToDifferentHandle);
+            }
+        } else {
+            unsafe { evdi_register_buffer(handle_sys, buffer.sys()) };
+            self.registered_update_ready_senders
+                .insert(buffer.id, buffer.send_update_ready.clone());
+            buffer.attached_to = Some(self.handle);
+        }
 
         let ready = unsafe { evdi_request_update(handle_sys, id_sys) };
         if !ready {
             Self::request_events_sys(user_data_sys, handle_sys);
-            update_ready.recv_timeout(timeout)?;
+            buffer.update_ready.recv_timeout(timeout)?;
         }
 
         unsafe {
@@ -75,32 +81,6 @@ impl Handle {
         }
 
         Ok(())
-    }
-
-    /// Unregister a buffer from the handle.
-    ///
-    /// If you provide this buffer to [`Handle::request_update`] in the future the buffer will be
-    /// registered again.
-    ///
-    /// If the buffer is not registered this has no effect.
-    pub fn unregister_buffer(&mut self, id: BufferId) {
-        let was_registered = self.registered_buffers.remove(&id).is_some();
-        if was_registered {
-            unsafe { evdi_unregister_buffer(self.handle, id.0) };
-        }
-    }
-
-    /// Idempotently ensure a buffer is registered.
-    fn ensure_registered_and_get_update_ready_receiver(
-        &mut self,
-        buffer: &Buffer,
-    ) -> &Receiver<()> {
-        let handle_sys = self.handle;
-        let (_, recv) = self.registered_buffers.entry(buffer.id).or_insert_with(|| {
-            unsafe { evdi_register_buffer(handle_sys, buffer.sys()) };
-            channel()
-        });
-        recv
     }
 
     pub fn enable_cursor_events(&self, enable: bool) {
@@ -178,8 +158,7 @@ impl Handle {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
 
         let id = BufferId(buf);
-
-        let send = handle.registered_buffers.get(&id).map(|(send, _)| send);
+        let send = handle.registered_update_ready_senders.get(&id);
 
         if let Some(send) = send {
             if let Err(err) = send.send(()) {
@@ -197,13 +176,13 @@ impl Handle {
     }
 
     /// Safety: user_data must be a valid reference to a Handle.
-    unsafe fn handle_from_user_data<'a>(user_data: *mut c_void) -> &'a Handle {
+    unsafe fn handle_from_user_data<'b>(user_data: *mut c_void) -> &'b Handle {
         (user_data as *mut Handle).as_ref().unwrap()
     }
 
     /// Takes a handle that has just been connected. Polls until ready.
-    fn new(handle: evdi_handle, device_config: DeviceConfig, ready_timeout: Duration) -> Self {
-        let poll_fd = unsafe { evdi_get_event_ready(handle) };
+    fn new(handle_sys: evdi_handle, device_config: DeviceConfig, ready_timeout: Duration) -> Self {
+        let poll_fd = unsafe { evdi_get_event_ready(handle_sys) };
         poll(
             &mut [pollfd {
                 fd: poll_fd,
@@ -217,9 +196,9 @@ impl Handle {
         let (mode_sender, mode) = channel();
 
         Self {
-            handle,
+            handle: handle_sys,
             device_config,
-            registered_buffers: HashMap::new(),
+            registered_update_ready_senders: CHashMap::new(),
             mode,
             mode_sender,
         }
@@ -235,9 +214,26 @@ impl Drop for Handle {
     }
 }
 
+impl PartialEq for Handle {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+    }
+}
+
+impl Eq for Handle {}
+
+#[derive(Debug, Error)]
+pub enum RequestUpdateError {
+    #[error("Kernel chose to update async, timeout waiting for")]
+    Timeout(#[from] RecvTimeoutError),
+    #[error("The buffer provided is attached to a different handle")]
+    BufferAttachedToDifferentHandle,
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct BufferId(i32);
 
+// TODO: Generate randomly?
 impl BufferId {
     pub fn new(id: i32) -> BufferId {
         BufferId(id)
@@ -247,14 +243,15 @@ impl BufferId {
 #[derive(Debug)]
 pub struct Buffer {
     pub id: BufferId,
-    version: u32,
+    attached_to: Option<evdi_handle>,
+    update_ready: Receiver<()>,
+    send_update_ready: Sender<()>,
     buffer: Box<[u8]>,
     rects: Box<[evdi_rect]>,
     num_rects: i32,
-    width: usize,
-    height: usize,
-    stride: usize,
-    depth: usize,
+    pub width: usize,
+    pub height: usize,
+    pub stride: usize,
 }
 
 /// Can't have more than 16
@@ -284,25 +281,65 @@ impl Buffer {
         ]
         .into_boxed_slice();
 
+        let (send_update_ready, update_ready) = channel();
+
         Buffer {
             id,
-            version: 0,
+            attached_to: None,
+            update_ready,
+            send_update_ready,
             buffer,
             rects,
             num_rects: -1,
             width,
             height,
             stride,
-            depth: BGRA_DEPTH,
         }
     }
 
-    /// The portions of the screen that changed before the last call to [`Handle::request_update`]
-    /// and after the preceding call, if more than one call has occurred.
-    pub fn dirty_rects(&self) -> Vec<DirtyRect> {
-        (0..self.num_rects as usize)
-            .map(|i| DirtyRect::new(self, i))
-            .collect()
+    /// Get a reference to the underlying bytes of this buffer.
+    ///
+    /// Use [`Buffer.width`], [`Buffer.height`], and [`Buffer.stride`] to interpret this.
+    ///
+    /// I believe this is in the format BGRA32. Some toy examples by other users assume that format.
+    /// I've filed [an issue][issue] on the wrapped library to clarify this.
+    ///
+    /// [issue]: https://github.com/DisplayLink/evdi/issues/266
+    pub fn bytes(&self) -> &[u8] {
+        self.buffer.as_ref()
+    }
+
+    /// Write the pixels to a file in the unoptimized image format [PPM].
+    ///
+    /// This is useful when debugging, as you can open the file in an image viewer and see if the
+    /// buffer is processed correctly.
+    ///
+    /// [PPM]: http://netpbm.sourceforge.net/doc/ppm.html
+    pub fn debug_write_to_ppm(&self, f: &mut File) -> io::Result<()> {
+        Self::write_line(f, "P6\n")?;
+        Self::write_line(f, format!("{}\n", self.width.to_string()))?;
+        Self::write_line(f, format!("{}\n", self.height.to_string()))?;
+        Self::write_line(f, "255\n")?;
+
+        for row in self.buffer.chunks_exact(self.stride) {
+            for pixel in row[0..self.width].chunks_exact(BGRA_DEPTH) {
+                let b = pixel[0];
+                let g = pixel[1];
+                let r = pixel[2];
+                let _a = pixel[3];
+
+                f.write_all(&[r, g, b])?;
+            }
+        }
+
+        f.flush()?;
+
+        Ok(())
+    }
+
+    fn write_line<S: AsRef<str>>(f: &mut File, line: S) -> io::Result<()> {
+        f.write_all(line.as_ref().as_bytes())?;
+        Ok(())
     }
 
     fn sys(&self) -> evdi_buffer {
@@ -316,147 +353,15 @@ impl Buffer {
             rect_count: 0,
         }
     }
-
-    /// MUST be called every time the `evdi_buffer` this represents may have been written to.
-    fn mark_updated(&mut self) {
-        self.version += 1;
-    }
 }
 
-/// A dirty portion of a [`Buffer`].
-///
-/// A `Buffer` is updated every time you call [`Handle::request_update`]. A `DirtyRect` refers to
-/// the pixels changed in a specific update, and is thus invalid if the buffer has been updated
-/// since its creation. Member functions will return `None` if the `DirtyRect` is no longer valid.
-pub struct DirtyRect<'a> {
-    buf: &'a Buffer,
-    i: usize,
-    version: u32,
-}
-
-impl<'a> DirtyRect<'a> {
-    /// The x and y coordinate bounds of this [`DirtyRect`].
-    ///
-    /// Returns `None` if the underlying [`Buffer`] has been updated since the update this
-    /// `DirtyRect` corresponds to.
-    pub fn bounds(&self) -> Option<DirtyRectBounds> {
-        if self.is_valid() {
-            Some(DirtyRectBounds::new(self.buf.rects[self.i]))
-        } else {
-            None
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        if let Some(handle) = self.attached_to.as_ref() {
+            // NOTE: We don't unregister the channel from the handle because of the onerous changes
+            // it would require us to make to our api surface.
+            unsafe { evdi_unregister_buffer(*handle, self.id.0) };
         }
-    }
-
-    /// Copy and return the bytes this `DirtyRect` refers to.
-    ///
-    /// You must not call [`Handle::update_buffer`] on the buffer this came from while this function
-    /// is running.
-    pub fn bytes(&self) -> Option<ChunkedBytes> {
-        if !self.is_valid() {
-            return None;
-        }
-
-        let buf = self.buf;
-
-        let mut out = ChunkedBytes::with_profile(buf.width, self.buf.height);
-        for line in 0..self.buf.height {
-            let start_inclusive = buf.stride * line;
-            let end_exclusive = start_inclusive + (buf.width * buf.depth);
-            // TODO: Does this copy slow us down noticeably?
-            let bytes = Bytes::copy_from_slice(&buf.buffer[start_inclusive..end_exclusive]);
-            out.put_bytes(bytes);
-        }
-
-        Some(out)
-    }
-
-    /// Write the pixels to a file in the unoptimized image format [PPM].
-    ///
-    /// This is useful when debugging, as you can open the file in an image viewer and see if the
-    /// buffer is processed correctly.
-    ///
-    /// The same requirements as [`Self::bytes`] apply.
-    ///
-    /// [PPM]: http://netpbm.sourceforge.net/doc/ppm.html
-    pub fn debug_write_to_ppm(&self, f: &mut File) -> Option<io::Result<()>> {
-        if let Some(bytes) = self.bytes() {
-            Some(Self::debug_write_bytes_to_ppm(
-                bytes,
-                self.buf.width,
-                self.buf.height,
-                f,
-            ))
-        } else {
-            None
-        }
-    }
-
-    fn debug_write_bytes_to_ppm(
-        bytes: ChunkedBytes,
-        width: usize,
-        height: usize,
-        f: &mut File,
-    ) -> io::Result<()> {
-        Self::write_line(f, "P6\n")?;
-        Self::write_line(f, format!("{}\n", width.to_string()))?;
-        Self::write_line(f, format!("{}\n", height.to_string()))?;
-        Self::write_line(f, "255\n")?;
-
-        for chunk in bytes.into_chunks() {
-            for chunk in chunk.as_ref().chunks_exact(BGRA_DEPTH) {
-                let b = chunk[0];
-                let g = chunk[1];
-                let r = chunk[2];
-                let _a = chunk[3];
-
-                f.write_all(&[r, g, b])?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn write_line<S: AsRef<str>>(f: &mut File, line: S) -> io::Result<()> {
-        f.write_all(line.as_ref().as_bytes())?;
-        Ok(())
-    }
-
-    fn new(buf: &'a Buffer, i: usize) -> Self {
-        Self {
-            buf,
-            i,
-            version: buf.version,
-        }
-    }
-
-    fn is_valid(&self) -> bool {
-        self.version == self.buf.version
-    }
-}
-
-pub struct DirtyRectBounds {
-    x1: u32,
-    y1: u32,
-    x2: u32,
-    y2: u32,
-}
-
-impl DirtyRectBounds {
-    fn new(sys: evdi_rect) -> Self {
-        Self {
-            x1: sys.x1 as u32,
-            y1: sys.y1 as u32,
-            x2: sys.x2 as u32,
-            y2: sys.y2 as u32,
-        }
-    }
-
-    fn width(&self) -> u32 {
-        self.x2 - self.x1
-    }
-
-    fn height(&self) -> u32 {
-        self.y2 - self.y1
     }
 }
 
@@ -565,14 +470,6 @@ mod tests {
     }
 
     #[test]
-    fn update_includes_at_least_one_dirty_rect() {
-        let mut handle = connect();
-        let buf = get_update(&mut handle);
-
-        assert!(!buf.dirty_rects().is_empty());
-    }
-
-    #[test]
     fn update_can_be_called_multiple_times() {
         let mut handle = connect();
 
@@ -582,7 +479,9 @@ mod tests {
         let mut buf = Buffer::new(BufferId::new(1), &mode);
 
         for _ in 0..10 {
-            handle.request_update(&mut buf, TIMEOUT).unwrap();
+            {
+                handle.request_update(&mut buf, TIMEOUT).unwrap();
+            }
         }
     }
 
@@ -603,16 +502,12 @@ mod tests {
     fn bytes_is_non_empty() {
         let mut handle = connect();
         let buf = get_update(&mut handle);
-        let rects = buf.dirty_rects();
-        let rect = &rects[0];
 
         let mut total: u32 = 0;
         let mut len: u32 = 0;
-        for chunk in rect.bytes().unwrap().into_chunks() {
-            for byte in chunk {
-                total += byte as u32;
-                len += 1;
-            }
+        for byte in buf.bytes().iter() {
+            total += *byte as u32;
+            len += 1;
         }
 
         let avg = total / len;
@@ -628,8 +523,6 @@ mod tests {
     fn can_output_debug() {
         let mut handle = connect();
         let buf = get_update(&mut handle);
-        let rects = buf.dirty_rects();
-        let rect = &rects[0];
 
         let mut f = File::with_options()
             .write(true)
@@ -637,7 +530,7 @@ mod tests {
             .open("TEMP_debug_rect.pnm")
             .unwrap();
 
-        rect.debug_write_to_ppm(&mut f).unwrap().unwrap();
+        buf.debug_write_to_ppm(&mut f).unwrap();
     }
 
     #[test]
