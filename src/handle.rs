@@ -4,11 +4,11 @@ use std::io;
 use std::io::Write;
 use std::mem::forget;
 use std::os::raw::{c_int, c_uint, c_void};
-use std::pin::Pin;
+
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use chunked_bytes::ChunkedBytes;
 use evdi_sys::*;
 use filedescriptor::{poll, pollfd, POLLIN};
@@ -22,7 +22,7 @@ use crate::device_config::DeviceConfig;
 pub struct Handle {
     handle: evdi_handle,
     device_config: DeviceConfig,
-    registered_buffers: HashMap<BufferID, (Sender<()>, Receiver<()>)>,
+    registered_buffers: HashMap<BufferId, (Sender<()>, Receiver<()>)>,
     mode: Receiver<evdi_mode>,
     mode_sender: Sender<evdi_mode>,
 }
@@ -33,15 +33,15 @@ impl Handle {
     /// Blocks until the update is complete.
     ///
     /// ```
-    /// # use evdi::{device::Device, device_config::DeviceConfig, handle::{Buffer, BufferID}};
+    /// # use evdi::{device::Device, device_config::DeviceConfig, handle::{Buffer, BufferId}};
     /// # use std::time::Duration;
     /// # let timeout = Duration::from_secs(1);
     /// # let mut handle = Device::get().unwrap().open().connect(&DeviceConfig::sample(), timeout);
     /// # handle.request_events();
     /// # let mode = handle.receive_mode(timeout).unwrap();
-    /// let mut buf = Buffer::new(BufferID::new(1), &mode);
+    /// let mut buf = Buffer::new(BufferId::new(1), &mode);
     /// handle.request_update(&mut buf, timeout).unwrap();
-    /// assert!(buf.dirty_rects().len() > 0);
+    /// assert!(!buf.dirty_rects().is_empty());
     /// ```
     pub fn request_update(
         &mut self,
@@ -83,7 +83,7 @@ impl Handle {
     /// registered again.
     ///
     /// If the buffer is not registered this has no effect.
-    pub fn unregister_buffer(&mut self, id: BufferID) {
+    pub fn unregister_buffer(&mut self, id: BufferId) {
         let was_registered = self.registered_buffers.remove(&id).is_some();
         if was_registered {
             unsafe { evdi_unregister_buffer(self.handle, id.0) };
@@ -96,13 +96,10 @@ impl Handle {
         buffer: &Buffer,
     ) -> &Receiver<()> {
         let handle_sys = self.handle;
-        let (_, recv) = self
-            .registered_buffers
-            .entry(buffer.id.clone())
-            .or_insert_with(|| {
-                unsafe { evdi_register_buffer(handle_sys, buffer.sys()) };
-                channel()
-            });
+        let (_, recv) = self.registered_buffers.entry(buffer.id).or_insert_with(|| {
+            unsafe { evdi_register_buffer(handle_sys, buffer.sys()) };
+            channel()
+        });
         recv
     }
 
@@ -180,7 +177,7 @@ impl Handle {
     extern "C" fn update_ready_handler_caller(buf: c_int, user_data: *mut c_void) {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
 
-        let id = BufferID(buf);
+        let id = BufferId(buf);
 
         let send = handle.registered_buffers.get(&id).map(|(send, _)| send);
 
@@ -239,17 +236,17 @@ impl Drop for Handle {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct BufferID(i32);
+pub struct BufferId(i32);
 
-impl BufferID {
-    pub fn new(id: i32) -> BufferID {
-        BufferID(id)
+impl BufferId {
+    pub fn new(id: i32) -> BufferId {
+        BufferId(id)
     }
 }
 
 #[derive(Debug)]
 pub struct Buffer {
-    pub id: BufferID,
+    pub id: BufferId,
     version: u32,
     buffer: Box<[u8]>,
     rects: Box<[evdi_rect]>,
@@ -268,7 +265,7 @@ const BGRA_DEPTH: usize = 4;
 
 impl Buffer {
     /// Allocate a buffer to store the screen of a device with a specific mode.
-    pub fn new(id: BufferID, mode: &evdi_mode) -> Self {
+    pub fn new(id: BufferId, mode: &evdi_mode) -> Self {
         let width = mode.width as usize;
         let height = mode.height as usize;
         let bits_per_pixel = mode.bits_per_pixel as usize;
@@ -287,7 +284,7 @@ impl Buffer {
         ]
         .into_boxed_slice();
 
-        let buf = Buffer {
+        Buffer {
             id,
             version: 0,
             buffer,
@@ -297,9 +294,7 @@ impl Buffer {
             height,
             stride,
             depth: BGRA_DEPTH,
-        };
-
-        buf
+        }
     }
 
     /// The portions of the screen that changed before the last call to [`Handle::request_update`]
@@ -558,7 +553,7 @@ mod tests {
         let handle = connect();
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
-        Buffer::new(BufferID(1), &mode);
+        Buffer::new(BufferId(1), &mode);
     }
 
     #[test]
@@ -566,7 +561,7 @@ mod tests {
         let handle = connect();
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
-        Buffer::new(BufferID(1), &mode).sys();
+        Buffer::new(BufferId(1), &mode).sys();
     }
 
     #[test]
@@ -574,7 +569,7 @@ mod tests {
         let mut handle = connect();
         let buf = get_update(&mut handle);
 
-        assert!(buf.dirty_rects().len() > 0);
+        assert!(!buf.dirty_rects().is_empty());
     }
 
     #[test]
@@ -584,7 +579,7 @@ mod tests {
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
 
-        let mut buf = Buffer::new(BufferID::new(1), &mode);
+        let mut buf = Buffer::new(BufferId::new(1), &mode);
 
         for _ in 0..10 {
             handle.request_update(&mut buf, TIMEOUT).unwrap();
@@ -594,7 +589,7 @@ mod tests {
     fn get_update(handle: &mut Handle) -> Buffer {
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
-        let mut buf = Buffer::new(BufferID::new(1), &mode);
+        let mut buf = Buffer::new(BufferId::new(1), &mode);
 
         // Give us some time to settle
         for _ in 0..20 {

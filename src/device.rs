@@ -77,13 +77,9 @@ impl Device {
     /// Tell the kernel module to create a new device.
     ///
     /// Requires superuser permissions.
-    pub fn add() -> Result<(), ()> {
+    pub fn add() -> bool {
         let status = unsafe { evdi_add_device() };
-        if status == 1 {
-            Ok(())
-        } else {
-            Err(())
-        }
+        status > 0
     }
 
     /// Remove all devices.
@@ -156,7 +152,7 @@ mod tests {
     #[test]
     fn add_fails_without_superuser() {
         let result = Device::add();
-        assert_eq!(result, Err(()));
+        assert_eq!(result, false);
     }
 
     #[test]
