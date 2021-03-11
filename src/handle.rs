@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::io::Write;
+use std::mem::forget;
 use std::os::raw::{c_int, c_uint, c_void};
 use std::pin::Pin;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -467,7 +468,13 @@ impl UnconnectedHandle {
             );
         }
 
-        Handle::new(self.handle, config, ready_timeout)
+        let sys = self.handle;
+
+        // Avoid running the destructor, which would close the underlying handle
+        // Since we are stack-allocated we still get cleaned up
+        forget(self);
+
+        Handle::new(sys, config, ready_timeout)
     }
 
     pub(crate) fn new(handle: evdi_handle) -> Self {
@@ -618,5 +625,15 @@ mod tests {
             .unwrap();
 
         rect.debug_write_to_ppm(&mut f).unwrap().unwrap();
+    }
+
+    #[test]
+    fn can_disconnect() {
+        let mut handle = connect();
+
+        for _ in 0..10 {
+            let unconnected = handle.disconnect();
+            handle = unconnected.connect(&DeviceConfig::sample(), TIMEOUT);
+        }
     }
 }
