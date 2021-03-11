@@ -1,6 +1,5 @@
 #![feature(with_options)]
 #![feature(try_trait)]
-#![feature(entry_insert)]
 
 use std::ffi::CStr;
 use std::fs::File;

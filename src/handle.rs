@@ -1,4 +1,3 @@
-use std::cmp::min;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io;
@@ -23,47 +22,12 @@ use crate::device_config::DeviceConfig;
 pub struct Handle {
     handle: evdi_handle,
     device_config: DeviceConfig,
-    buffers: HashMap<BufferID, Buffer>,
+    registered_buffers: HashMap<BufferID, (Sender<()>, Receiver<()>)>,
     mode: Receiver<evdi_mode>,
     mode_sender: Sender<evdi_mode>,
 }
 
 impl Handle {
-    /// Register a buffer with the handle.
-    ///
-    /// ```
-    /// # use evdi::{device::Device, device_config::DeviceConfig, handle::{Buffer, BufferID}};
-    /// # use std::time::Duration;
-    /// # let timeout = Duration::from_secs(1);
-    /// # let mut handle = Device::get().unwrap().open().connect(&DeviceConfig::sample(), timeout);
-    /// # handle.request_events();
-    /// let mode = handle.receive_mode(timeout).unwrap();
-    /// let buf = Buffer::new(BufferID::new(1), &mode);
-    ///
-    /// handle.register_buffer(buf);
-    /// ```
-    pub fn register_buffer(&mut self, buffer: Buffer) {
-        let id = buffer.id.clone();
-        let mut entry = self.buffers.entry(id).insert(buffer);
-        let buf_ref = entry.get_mut();
-
-        unsafe {
-            evdi_register_buffer(self.handle, buf_ref.sys());
-        }
-    }
-
-    /// Unregister a buffer from the handle.
-    ///
-    /// If the buffer is not registered this has no effect.
-    pub fn unregister_buffer(&mut self, id: BufferID) {
-        let buf = self.buffers.remove(&id);
-        if let Some(buf) = buf {
-            unsafe {
-                evdi_unregister_buffer(self.handle, buf.id.0);
-            }
-        }
-    }
-
     /// Ask the kernel module to update a buffer with the current display pixels.
     ///
     /// Blocks until the update is complete.
@@ -75,41 +39,64 @@ impl Handle {
     /// # let mut handle = Device::get().unwrap().open().connect(&DeviceConfig::sample(), timeout);
     /// # handle.request_events();
     /// # let mode = handle.receive_mode(timeout).unwrap();
-    /// # let buf_id = BufferID::new(1);
-    /// # let buf = Buffer::new(buf_id, &mode);
-    /// # handle.register_buffer(buf);
-    /// let buf = handle.request_update(&buf_id, timeout).unwrap();
+    /// let mut buf = Buffer::new(BufferID::new(1), &mode);
+    /// handle.request_update(&mut buf, timeout).unwrap();
     /// assert!(buf.dirty_rects().len() > 0);
     /// ```
-    pub fn request_update(&mut self, id: &BufferID, timeout: Duration) -> Result<&Buffer, RecvTimeoutError> {
+    pub fn request_update(&mut self, buffer: &mut Buffer, timeout: Duration) -> Result<(), RecvTimeoutError> {
         // NOTE: We need to take &mut self to ensure we can't be called concurrently. This is
-        // required because evdi_grab_pixels grabs from the most recently updated buffer.
+        //  required because evdi_grab_pixels grabs from the most recently updated buffer.
+        //
+        //  We need to take &mut buffer to ensure the buffer can't be read from while it's being
+        //  updated.
+        let user_data_sys = self as *const Handle;
+        let handle_sys = self.handle;
+        let id_sys = buffer.id.0;
 
-        {
-            self.buf_required_mut(id).mark_updated();
-        }
+        let update_ready = self.ensure_registered_and_get_update_ready_receiver(&buffer);
+        buffer.mark_updated();
 
-        let ready = unsafe { evdi_request_update(self.handle, id.0) };
+
+        let ready = unsafe { evdi_request_update(handle_sys, id_sys) };
         if !ready {
-            self.request_events();
-
-            self.buf_required(id).update_ready.recv_timeout(timeout)?;
+            Self::request_events_sys(user_data_sys, handle_sys);
+            update_ready.recv_timeout(timeout)?;
         }
-
-        // We cast to *const and back to get around the borrow checker, which doesn't want us to be
-        // able to have an &mut to both the handle and the buffer
-        let handle = self.handle as *const evdi_device_context;
-        let buf = self.buf_required_mut(id);
 
         unsafe {
             evdi_grab_pixels(
-                handle as *mut evdi_device_context,
-                buf.rects.as_mut_ptr(),
-                &mut buf.num_rects as &mut i32,
+                self.handle as *mut evdi_device_context,
+                buffer.rects.as_mut_ptr(),
+                &mut buffer.num_rects,
             )
         }
 
-        Ok(buf)
+        Ok(())
+    }
+
+    /// Unregister a buffer from the handle.
+    ///
+    /// If you provide this buffer to [`Handle::request_update`] in the future the buffer will be
+    /// registered again.
+    ///
+    /// If the buffer is not registered this has no effect.
+    pub fn unregister_buffer(&mut self, id: BufferID) {
+        let was_registered = self.registered_buffers.remove(&id).is_some();
+        if was_registered {
+            unsafe { evdi_unregister_buffer(self.handle, id.0) };
+        }
+    }
+
+    /// Idempotently ensure a buffer is registered.
+    fn ensure_registered_and_get_update_ready_receiver(&mut self, buffer: &Buffer) -> &Receiver<()> {
+        let handle_sys = self.handle;
+        let (_, recv) = self.registered_buffers
+            .entry(buffer.id.clone())
+            .or_insert_with(|| {
+                unsafe { evdi_register_buffer(handle_sys, buffer.sys()) };
+                channel()
+            });
+        recv
     }
 
     pub fn enable_cursor_events(&self, enable: bool) {
@@ -121,7 +108,11 @@ impl Handle {
     /// I think this blocks, dispatches a certain number of events, and the then returns, so callers
     /// should call in a loop. However, the docs aren't clear.
     /// See <https://github.com/DisplayLink/evdi/issues/265>
-    pub fn request_events(&mut self) {
+    pub fn request_events(&self) {
+        Self::request_events_sys(self as *const Handle, self.handle);
+    }
+
+    fn request_events_sys(user_data: *const Handle, handle: evdi_handle) {
         let mut ctx = evdi_event_context {
             dpms_handler: None,
             mode_changed_handler: Some(Self::mode_changed_handler_caller),
@@ -131,9 +122,9 @@ impl Handle {
             cursor_move_handler: None,
             ddcci_data_handler: None,
             // Safety: We cast to a mut pointer, but we never cast back to a mut reference
-            user_data: self as *mut _ as *mut c_void,
+            user_data: user_data as *mut c_void,
         };
-        unsafe { evdi_handle_events(self.handle, &mut ctx) };
+        unsafe { evdi_handle_events(handle, &mut ctx) };
     }
 
     /// Blocks until a mode event is received.
@@ -179,9 +170,9 @@ impl Handle {
 
         let id = BufferID(buf);
 
-        let send = handle.buffers
+        let send = handle.registered_buffers
             .get(&id)
-            .map(|buf| &buf.update_ready_sender);
+            .map(|(send, _)| send);
 
         if let Some(send) = send {
             if let Err(err) = send.send(()) {
@@ -197,14 +188,6 @@ impl Handle {
         (user_data as *mut Handle).as_ref().unwrap()
     }
 
-    fn buf_required(&self, id: &BufferID) -> &Buffer {
-        self.buffers.get(id).expect("Buffer not registered with handler")
-    }
-
-    fn buf_required_mut(&mut self, id: &BufferID) -> &mut Buffer {
-        self.buffers.get_mut(id).expect("Buffer not registered with handler")
-    }
-
     /// Takes a handle that has just been connected. Polls until ready.
     fn new(handle: evdi_handle, device_config: DeviceConfig, ready_timeout: Duration) -> Self {
         let poll_fd = unsafe { evdi_get_event_ready(handle) };
@@ -218,7 +201,7 @@ impl Handle {
         Self {
             handle,
             device_config,
-            buffers: HashMap::new(),
+            registered_buffers: HashMap::new(),
             mode,
             mode_sender,
         }
@@ -254,8 +237,6 @@ pub struct Buffer {
     height: usize,
     stride: usize,
     depth: usize,
-    update_ready: Receiver<()>,
-    update_ready_sender: Sender<()>,
 }
 
 /// Can't have more than 16
@@ -275,8 +256,6 @@ impl Buffer {
         let buffer = Box::pin(vec![0u8; height * stride]);
         let rects = Box::pin(vec![evdi_rect { x1: 0, y1: 0, x2: 0, y2: 0 }; MAX_RECTS_BUFFER_LEN]);
 
-        let (update_ready_sender, update_ready) = channel();
-
         let buf = Buffer {
             id,
             version: 0,
@@ -287,8 +266,6 @@ impl Buffer {
             height,
             stride,
             depth: BGRA_DEPTH,
-            update_ready,
-            update_ready_sender,
         };
 
         buf
@@ -302,7 +279,7 @@ impl Buffer {
             .collect()
     }
 
-    fn sys(&mut self) -> evdi_buffer {
+    fn sys(&self) -> evdi_buffer {
         evdi_buffer {
             id: self.id.0,
             buffer: self.buffer.as_ptr() as *mut c_void,
@@ -387,7 +364,7 @@ impl<'a> DirtyRect<'a> {
         bytes: ChunkedBytes,
         width: usize,
         height: usize,
-        f: &mut File
+        f: &mut File,
     ) -> io::Result<()> {
         Self::write_line(f, "P6\n")?;
         Self::write_line(f, format!("{}\n", width.to_string()))?;
@@ -502,7 +479,6 @@ impl Drop for UnconnectedHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::thread::sleep;
     use std::time::Duration;
 
     use crate::device::Device;
@@ -530,7 +506,7 @@ mod tests {
 
     #[test]
     fn can_receive_mode() {
-        let mut handle = connect();
+        let handle = connect();
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
         assert!(mode.height > 100);
@@ -538,7 +514,7 @@ mod tests {
 
     #[test]
     fn can_create_buffer() {
-        let mut handle = connect();
+        let handle = connect();
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
         Buffer::new(BufferID(1), &mode);
@@ -546,23 +522,10 @@ mod tests {
 
     #[test]
     fn can_access_buffer_sys() {
-        let mut handle = connect();
+        let handle = connect();
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
         Buffer::new(BufferID(1), &mode).sys();
-    }
-
-    #[test]
-    fn can_register_buffers() {
-        let mut handle = connect();
-        handle.request_events();
-        let mode = handle.receive_mode(TIMEOUT).unwrap();
-
-        let buf1 = Buffer::new(BufferID(1), &mode);
-        let buf2 = Buffer::new(BufferID(2), &mode);
-
-        handle.register_buffer(buf1);
-        handle.register_buffer(buf2);
     }
 
     #[test]
@@ -580,26 +543,24 @@ mod tests {
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
 
-        let buf_id = BufferID::new(1);
-        handle.register_buffer(Buffer::new(buf_id, &mode));
+        let mut buf = Buffer::new(BufferID::new(1), &mode);
 
         for _ in 0..10 {
-            handle.request_update(&buf_id, TIMEOUT).unwrap();
+            handle.request_update(&mut buf, TIMEOUT).unwrap();
         }
     }
 
-    fn get_update(handle: &mut Handle) -> &Buffer {
+    fn get_update(handle: &mut Handle) -> Buffer {
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
-        let buf_id = BufferID::new(1);
-        handle.register_buffer(Buffer::new(buf_id, &mode));
+        let mut buf = Buffer::new(BufferID::new(1), &mode);
 
-        // Settle
+        // Give us some time to settle
         for _ in 0..20 {
-            handle.request_update(&buf_id, TIMEOUT).unwrap();
+            handle.request_update(&mut buf, TIMEOUT).unwrap();
         }
 
-        handle.request_update(&buf_id, TIMEOUT).unwrap()
+        buf
     }
 
     #[test]
