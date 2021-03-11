@@ -6,6 +6,14 @@ pub struct DeviceConfig {
 }
 
 impl DeviceConfig {
+    pub fn sample() -> Self {
+        Self::new(
+            include_bytes!("sample_edid_1280_800"),
+            1280,
+            800,
+        )
+    }
+
     pub fn new(edid: &[u8], width_pixels: u32, height_pixels: u32) -> Self {
         Self { edid: edid.to_owned(), width_pixels, height_pixels }
     }
