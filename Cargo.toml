@@ -3,6 +3,11 @@ name = "evdi"
 version = "0.1.0"
 authors = ["Daniel Franklin <daniel@danielzfranklin.org>"]
 edition = "2018"
+license = "MIT"
+description = "Safe bindings for evdi"
+repository = "https://github.com/danielzfranklin/evdi-rs"
+keywords = ["evdi", "displaylink", "bindings", "linux"]
+categories = ["os::linux-apis", "api-bindings"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
