@@ -155,6 +155,18 @@ impl Handle {
         self.mode.recv_timeout(timeout)
     }
 
+    pub fn disconnect(self) -> UnconnectedHandle {
+        let sys = self.handle;
+
+        // Avoid running the destructor, which would close the underlying handle
+        // Since we are stack-allocated we still get cleaned up
+        forget(self);
+
+        unsafe { evdi_disconnect(sys) };
+
+        UnconnectedHandle::new(sys)
+    }
+
     extern "C" fn mode_changed_handler_caller(mode: evdi_mode, user_data: *mut c_void) {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
         if let Err(err) = handle.mode_sender.send(mode) {
