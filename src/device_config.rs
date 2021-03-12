@@ -22,7 +22,7 @@ impl DeviceConfig {
         &self.edid
     }
 
-    pub fn sku_area_limit(&self) -> u32 {
+    pub(crate) fn sku_area_limit(&self) -> u32 {
         self.width_pixels * self.height_pixels
     }
 }
