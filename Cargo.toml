@@ -1,6 +1,6 @@
 [package]
 name = "evdi"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Daniel Franklin <daniel@danielzfranklin.org>"]
 edition = "2018"
 license = "MIT"

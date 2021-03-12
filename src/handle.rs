@@ -148,6 +148,8 @@ impl Handle {
             )
         }
 
+        buffer.mark_updated();
+
         Ok(())
     }
 

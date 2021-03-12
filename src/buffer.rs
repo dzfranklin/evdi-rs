@@ -31,6 +31,30 @@ impl BufferId {
 /// A buffer used to store the virtual screen pixels.
 #[derive(Debug)]
 pub struct Buffer {
+    /// None if the buffer never been written to, otherwise Some(n) where n increases by some amount
+    /// every time the buffer is written to.
+    ///
+    /// ```
+    /// # use evdi::prelude::*;
+    /// # use std::time::Duration;
+    /// # let timeout = Duration::from_secs(1);
+    /// # let mut handle = DeviceNode::get().unwrap().open().unwrap()
+    /// #     .connect(&DeviceConfig::sample(), timeout).unwrap();
+    /// # handle.request_events();
+    /// # let mode = handle.receive_mode(timeout).unwrap();
+    /// let mut buf = Buffer::new(&mode);
+    ///
+    /// assert!(buf.version.is_none());
+    ///
+    /// handle.request_update(&mut buf, timeout).unwrap();
+    /// let after_first = buf.version;
+    ///
+    /// handle.request_update(&mut buf, timeout).unwrap();
+    /// let after_second = buf.version;
+    ///
+    /// assert!(after_second.unwrap() > after_first.unwrap());
+    /// ```
+    pub version: Option<u32>,
     pub(crate) id: BufferId,
     attached_to: Option<evdi_handle>,
     update_ready: Receiver<()>,
@@ -73,6 +97,7 @@ impl Buffer {
         let (send_update_ready, update_ready) = channel();
 
         Buffer {
+            version: None,
             id: BufferId::generate(),
             attached_to: None,
             update_ready,
@@ -176,6 +201,14 @@ impl Buffer {
             stride: self.stride as c_int,
             rects: self.rects_ptr_sys() as *mut evdi_rect,
             rect_count: 0,
+        }
+    }
+
+    pub(crate) fn mark_updated(&mut self) {
+        self.version = if let Some(prev) = self.version {
+            Some(prev + 1)
+        } else {
+            Some(0)
         }
     }
 }
