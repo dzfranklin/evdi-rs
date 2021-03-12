@@ -1,3 +1,5 @@
+//! Buffer to receive virtual screen pixels
+
 use crate::prelude::*;
 use evdi_sys::*;
 use rand::Rng;
@@ -26,6 +28,7 @@ impl BufferId {
     }
 }
 
+/// A buffer used to store the virtual screen pixels.
 #[derive(Debug)]
 pub struct Buffer {
     pub(crate) id: BufferId,
@@ -85,7 +88,7 @@ impl Buffer {
 
     /// Get a reference to the underlying bytes of this buffer.
     ///
-    /// Use [`Buffer.width`], [`Buffer.height`], and [`Buffer.stride`] to interpret this.
+    /// Use [`Buffer::width`], [`Buffer::height`], and [`Buffer::stride`] to interpret this.
     ///
     /// I believe this is in the format BGRA32. Some toy examples by other users assume that format.
     /// I've filed [an issue][issue] on the wrapped library to clarify this.

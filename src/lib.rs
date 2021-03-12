@@ -1,6 +1,71 @@
 #![feature(with_options)]
 #![feature(try_trait)]
 
+//! Safe bindings to [evdi](https://github.com/DisplayLink/evdi), a library for managing virtual
+//! displays on linux.
+//!
+//! ## Basic usage
+//!
+//! ```
+//! # use std::error::Error;
+//! # use std::time::Duration;
+//! # use evdi::prelude::*;
+//! #
+//! const READY_TIMEOUT: Duration = Duration::from_secs(1);
+//! const RECEIVE_INITIAL_MODE_TIMEOUT: Duration = Duration::from_secs(1);
+//! const UPDATE_BUFFER_TIMEOUT: Duration = Duration::from_millis(100);
+//!
+//! # fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
+//! // If get returns None you need to call DeviceNode::add with superuser permissions.
+//! let device = DeviceNode::get().unwrap();
+//!
+//! // Replace this with the details of the display you want to emulate
+//! let device_config = DeviceConfig::sample();
+//!
+//! let unconnected_handle = device.open()?;
+//! let mut handle = unconnected_handle.connect(&device_config, READY_TIMEOUT)?;
+//!
+//! // For simplicity don't handle mode changed events in this example
+//! handle.request_events();
+//! let mode = handle.receive_mode(RECEIVE_INITIAL_MODE_TIMEOUT)?;
+//!
+//! // For simplicity, we only use one buffer. You may want to use more than one buffer so that you
+//! // can send the contents of one buffer while updating another.
+//! let mut buf = Buffer::new(&mode);
+//!
+//! # let mut loop_count = 0;
+//! loop {
+//!     handle.request_update(&mut buf, UPDATE_BUFFER_TIMEOUT)?;
+//!     // Do something with the bytes
+//!     let _bytes = buf.bytes();
+//! #
+//! #   if loop_count > 10 { break; }
+//! #   loop_count += 1;
+//! }
+//!
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Managing device nodes
+//! Creating and removing device nodes requires superuser permissions.
+//!
+//! I include the helper binaries `evdi_device_add` and `evdi_device_remove_all` that do nothing but
+//! call [`DeviceNode::add`](crate::device_node::DeviceNode::add) and
+//! [`DeviceNode::remove_all`](crate::device_node::DeviceNode::remove_all) so that you can easily
+//! manage devices while testing.
+//!
+//! For example:
+//!
+//! ```bash
+//! > # (while in the checked out source code of this library)
+//! > cargo build --bin evdi_device_add
+//! > sudo target/debug/evdi_device_add
+//! ```
+//!
+//! You will probably want to create your own seperate binaries that manage device nodes so that
+//! your users don't need to run your main binary with superuser permissions.
+
 use std::ffi::CStr;
 use std::fs::File;
 use std::io::Read;
@@ -48,15 +113,16 @@ pub fn check_kernel_mod() -> KernelModStatus {
     }
 }
 
+/// Status of the evdi kernel module
 pub enum KernelModStatus {
     NotInstalled,
     Outdated,
     Compatible,
 }
 
-/// Set a callback to receive log messages, instead of having them written to stdout.
+/// Set the callback to receive log messages, instead of having them written to stdout.
 ///
-/// The callback is per-client.
+/// The callback is global.
 ///
 /// ```
 /// # use evdi::prelude::*;
@@ -82,6 +148,7 @@ extern "C" fn logging_cb_caller<F: Fn(String)>(user_data: *mut c_void, msg: *con
 
 const MOD_VERSION_FILE: &str = "/sys/devices/evdi/version";
 
+/// Version of kernel evdi module
 pub struct KernelModVersion {
     pub major: u32,
     pub minor: u32,
@@ -166,6 +233,7 @@ impl LibVersion {
     }
 }
 
+/// Display video mode data
 pub type Mode = evdi_mode;
 
 #[cfg(test)]

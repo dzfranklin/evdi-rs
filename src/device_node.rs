@@ -1,3 +1,4 @@
+//! Device node (`/dev/dri/card*`)
 use std::cmp::Ordering;
 use std::fs::File;
 use std::io::Write;
@@ -91,7 +92,7 @@ impl DeviceNode {
 
     /// Tell the kernel module to create a new evdi device node.
     ///
-    /// Requires superuser permissions.
+    /// **Requires superuser permissions.**
     pub fn add() -> bool {
         let status = unsafe { evdi_add_device() };
         status > 0
@@ -99,7 +100,7 @@ impl DeviceNode {
 
     /// Remove all evdi device nodes.
     ///
-    /// Requires superuser permissions.
+    /// **Requires superuser permissions.**
     pub fn remove_all() -> io::Result<()> {
         let mut f = File::with_options().write(true).open(REMOVE_ALL_FILE)?;
         f.write_all("1".as_ref())?;
@@ -126,7 +127,7 @@ impl PartialOrd for DeviceNode {
     }
 }
 
-/// Status of a [Device]
+/// Status of a [`DeviceNode`]
 #[derive(Debug, PartialEq)]
 pub enum DeviceNodeStatus {
     Available,

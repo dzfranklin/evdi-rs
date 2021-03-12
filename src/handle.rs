@@ -1,3 +1,5 @@
+//! Performs most operations
+
 use std::collections::HashMap;
 use std::mem::forget;
 use std::os::raw::{c_int, c_uint, c_void};
@@ -85,8 +87,6 @@ pub enum PollReadyError {
 }
 
 /// Represents an evdi handle that is connected and ready.
-///
-/// Automatically disconnected on drop.
 #[derive(Debug)]
 pub struct Handle {
     sys: evdi_handle,
@@ -193,7 +193,6 @@ impl Handle {
     /// # let mut handle = device.open().unwrap()
     /// #   .connect(&DeviceConfig::sample(), timeout).unwrap();
     /// handle.request_events();
-    ///
     /// let mode = handle.receive_mode(timeout).unwrap();
     /// ```
     pub fn receive_mode(&self, timeout: Duration) -> Result<Mode, RecvTimeoutError> {
@@ -212,7 +211,6 @@ impl Handle {
     /// # let mut handle = device.open().unwrap()
     /// #   .connect(&DeviceConfig::sample(), timeout).unwrap();
     /// handle.request_events();
-    ///
     /// if let Some(mode) = handle.try_receive_mode() {
     ///     // use the mode
     /// }
@@ -221,6 +219,10 @@ impl Handle {
         self.mode.try_recv().ok()
     }
 
+    /// Disconnect the handle.
+    ///
+    /// A handle is automatically disconnected and closed on drop, you only need this if you want
+    /// to keep the `UnconnectedHandle` around to potentially connect to later.
     pub fn disconnect(self) -> UnconnectedHandle {
         let sys = self.sys;
 
