@@ -7,21 +7,21 @@ use std::{fs, io};
 use evdi_sys::*;
 use lazy_static::lazy_static;
 use regex::Regex;
+use thiserror::Error;
 
 use crate::handle::UnconnectedHandle;
-use std::ptr::null;
 
 const DEVICE_CARDS_DIR: &str = "/dev/dri";
 const REMOVE_ALL_FILE: &str = "/sys/devices/evdi/remove_all";
 
-/// Represents a /dev/dri/card*.
+/// Represents a device node (`/dev/dri/card*`).
 #[derive(Debug, PartialEq, Eq)]
 pub struct Device {
     id: i32,
 }
 
 impl Device {
-    /// Returns a device if one is available.
+    /// Returns an evdi device node if one is available.
     ///
     /// If no device is available you will need to run Device::add() with superuser permissions.
     pub fn get() -> Option<Self> {
@@ -32,23 +32,33 @@ impl Device {
         }
     }
 
-    /// Get the status of a device.
+    /// Check if a device node is an evdi device node, is a different device node, or doesn't exist.
     pub fn status(&self) -> DeviceStatus {
         let sys = unsafe { evdi_check_device(self.id) };
         DeviceStatus::from(sys)
     }
 
-    /// Open a device.
-    pub fn open(&self) -> Option<UnconnectedHandle> {
-        let sys = unsafe { evdi_open(self.id) };
-        if !sys.is_null() {
-            Some(UnconnectedHandle::new(sys))
-        } else {
-            None
+    /// Open an evdi device node.
+    ///
+    /// Returns None if we fail to open the device, which may be because the device isn't an evdi
+    /// device node.
+    pub fn open(&self) -> Result<UnconnectedHandle, OpenDeviceError> {
+        // NOTE: Opening invalid devices can be very slow (~10sec on my laptop), so we check first
+        match self.status() {
+            DeviceStatus::Unrecognized => Err(OpenDeviceError::NotEvdiDevice),
+            DeviceStatus::NotPresent => Err(OpenDeviceError::NonexistentDevice),
+            DeviceStatus::Available => {
+                let sys = unsafe { evdi_open(self.id) };
+                if !sys.is_null() {
+                    Ok(UnconnectedHandle::new(sys))
+                } else {
+                    Err(OpenDeviceError::Unknown)
+                }
+            }
         }
     }
 
-    /// List all devices that have available status in a stable order
+    /// List all evdi device nodes that have available status in a stable order
     pub fn list_available() -> io::Result<Vec<Self>> {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"^card([0-9]+)$").unwrap();
@@ -79,7 +89,7 @@ impl Device {
         Ok(available)
     }
 
-    /// Tell the kernel module to create a new device.
+    /// Tell the kernel module to create a new evdi device node.
     ///
     /// Requires superuser permissions.
     pub fn add() -> bool {
@@ -87,7 +97,7 @@ impl Device {
         status > 0
     }
 
-    /// Remove all devices.
+    /// Remove all evdi device nodes.
     ///
     /// Requires superuser permissions.
     pub fn remove_all() -> io::Result<()> {
@@ -122,6 +132,16 @@ pub enum DeviceStatus {
     Available,
     Unrecognized,
     NotPresent,
+}
+
+#[derive(Debug, Error)]
+pub enum OpenDeviceError {
+    #[error("The device node does not exist")]
+    NonexistentDevice,
+    #[error("The device node is not an evdi device node")]
+    NotEvdiDevice,
+    #[error("The call to the c library failed. Maybe the device node is an incompatible version?")]
+    Unknown,
 }
 
 impl DeviceStatus {
@@ -181,6 +201,24 @@ mod tests {
     #[test]
     fn can_open() {
         let device = Device::get().unwrap();
-        device.open();
+        device.open().unwrap();
+    }
+
+    #[test]
+    fn opening_nonexistent_device_fails() {
+        let device = Device::new(4200);
+        match device.open() {
+            Err(OpenDeviceError::NonexistentDevice) => (),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn opening_non_evdi_device_fails() {
+        let device = Device::new(0);
+        match device.open() {
+            Err(OpenDeviceError::NotEvdiDevice) => (),
+            _ => panic!(),
+        }
     }
 }
