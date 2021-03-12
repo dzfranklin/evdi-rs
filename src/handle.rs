@@ -1,7 +1,4 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io;
-use std::io::Write;
 use std::mem::forget;
 use std::os::raw::{c_int, c_uint, c_void};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -11,14 +8,89 @@ use evdi_sys::*;
 use filedescriptor::{poll, pollfd, POLLIN};
 use thiserror::Error;
 
+use crate::buffer::*;
 use crate::device_config::DeviceConfig;
+
+/// Represents a handle that is open but not connected.
+#[derive(Debug)]
+pub struct UnconnectedHandle {
+    handle: evdi_handle,
+}
+
+impl UnconnectedHandle {
+    /// Connect to an handle and block until ready.
+    ///
+    /// ```
+    /// # use evdi::device_node::DeviceNode;
+    /// # use evdi::device_config::DeviceConfig;
+    /// # use std::time::Duration;
+    /// let device: DeviceNode = DeviceNode::get().unwrap();
+    /// let handle = device
+    ///     .open().unwrap()
+    ///     .connect(&DeviceConfig::sample(), Duration::from_secs(1));
+    /// ```
+    pub fn connect(
+        self,
+        config: &DeviceConfig,
+        ready_timeout: Duration,
+    ) -> Result<Handle, PollReadyError> {
+        // NOTE: We deliberately take ownership to ensure a handle is connected at most once.
+
+        let config: DeviceConfig = config.to_owned();
+        let edid = Box::leak(Box::new(config.edid()));
+        unsafe {
+            evdi_connect(
+                self.handle,
+                edid.as_ptr(),
+                edid.len() as c_uint,
+                config.sku_area_limit(),
+            );
+        }
+
+        let sys = self.handle;
+
+        // Avoid running the destructor, which would close the underlying handle
+        // Since we are stack-allocated we still get cleaned up
+        forget(self);
+
+        let handle = Handle::new(sys, config);
+
+        let poll_fd = unsafe { evdi_get_event_ready(handle.sys) };
+        poll(
+            &mut [pollfd {
+                fd: poll_fd,
+                events: POLLIN,
+                revents: 0,
+            }],
+            Some(ready_timeout),
+        )?;
+
+        Ok(handle)
+    }
+
+    pub(crate) fn new(handle: evdi_handle) -> Self {
+        Self { handle }
+    }
+}
+
+impl Drop for UnconnectedHandle {
+    fn drop(&mut self) {
+        unsafe { evdi_close(self.handle) };
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum PollReadyError {
+    #[error("The polling library we currently use doesn't provide detailed errors")]
+    Generic(#[from] anyhow::Error),
+}
 
 /// Represents an evdi handle that is connected and ready.
 ///
 /// Automatically disconnected on drop.
 #[derive(Debug)]
 pub struct Handle {
-    handle: evdi_handle,
+    sys: evdi_handle,
     device_config: DeviceConfig,
     // NOTE: Not cleaned up on buffer deregister
     registered_update_ready_senders: HashMap<BufferId, Sender<()>>,
@@ -32,11 +104,11 @@ impl Handle {
     /// Blocks until the update is complete.
     ///
     /// ```
-    /// # use evdi::{device_node::DeviceNode, device_config::DeviceConfig, handle::{Buffer, BufferId}};
+    /// # use evdi::{device_node::DeviceNode, device_config::DeviceConfig, buffer::{Buffer, BufferId}};
     /// # use std::time::Duration;
     /// # let timeout = Duration::from_secs(1);
     /// # let mut handle = DeviceNode::get().unwrap().open().unwrap()
-    /// #     .connect(&DeviceConfig::sample(), timeout);
+    /// #     .connect(&DeviceConfig::sample(), timeout).unwrap();
     /// # handle.request_events();
     /// # let mode = handle.receive_mode(timeout).unwrap();
     /// let mut buf = Buffer::new(BufferId::new(1), &mode);
@@ -53,31 +125,27 @@ impl Handle {
         //  We need to take &mut buffer to ensure the buffer can't be read from while it's being
         //  updated.
         let user_data_sys = self as *const Handle;
-        let handle_sys = self.handle;
-        let id_sys = buffer.id.0;
+        let handle_sys = self.sys;
+        let id_sys = buffer.id.sys();
 
-        if let Some(sys) = buffer.attached_to {
-            if sys != self.handle {
-                return Err(RequestUpdateError::BufferAttachedToDifferentHandle);
-            }
-        } else {
+        let just_attached = buffer.ensure_attached_to(self.sys)?;
+        if just_attached {
             unsafe { evdi_register_buffer(handle_sys, buffer.sys()) };
             self.registered_update_ready_senders
-                .insert(buffer.id, buffer.send_update_ready.clone());
-            buffer.attached_to = Some(self.handle);
+                .insert(buffer.id, buffer.update_ready_sender());
         }
 
         let ready = unsafe { evdi_request_update(handle_sys, id_sys) };
         if !ready {
             Self::request_events_sys(user_data_sys, handle_sys);
-            buffer.update_ready.recv_timeout(timeout)?;
+            buffer.block_until_update_ready(timeout)?;
         }
 
         unsafe {
             evdi_grab_pixels(
-                self.handle as *mut evdi_device_context,
-                buffer.rects.as_mut_ptr(),
-                &mut buffer.num_rects,
+                self.sys as *mut evdi_device_context,
+                buffer.rects_ptr_sys(),
+                buffer.rects_count_ptr_sys(),
             )
         }
 
@@ -86,7 +154,7 @@ impl Handle {
 
     pub fn enable_cursor_events(&self, enable: bool) {
         unsafe {
-            evdi_enable_cursor_events(self.handle, enable);
+            evdi_enable_cursor_events(self.sys, enable);
         }
     }
 
@@ -96,7 +164,7 @@ impl Handle {
     /// should call in a loop. However, the docs aren't clear.
     /// See <https://github.com/DisplayLink/evdi/issues/265>
     pub fn request_events(&self) {
-        Self::request_events_sys(self as *const Handle, self.handle);
+        Self::request_events_sys(self as *const Handle, self.sys);
     }
 
     fn request_events_sys(user_data: *const Handle, handle: evdi_handle) {
@@ -125,7 +193,7 @@ impl Handle {
     /// # let device: DeviceNode = DeviceNode::get().unwrap();
     /// # let timeout = Duration::from_secs(1);
     /// # let mut handle = device.open().unwrap()
-    /// #   .connect(&DeviceConfig::sample(), timeout);
+    /// #   .connect(&DeviceConfig::sample(), timeout).unwrap();
     /// handle.request_events();
     ///
     /// let mode = handle.receive_mode(timeout).unwrap();
@@ -135,7 +203,7 @@ impl Handle {
     }
 
     pub fn disconnect(self) -> UnconnectedHandle {
-        let sys = self.handle;
+        let sys = self.sys;
 
         // Avoid running the destructor, which would close the underlying handle
         // Since we are stack-allocated we still get cleaned up
@@ -159,7 +227,7 @@ impl Handle {
     extern "C" fn update_ready_handler_caller(buf: c_int, user_data: *mut c_void) {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
 
-        let id = BufferId(buf);
+        let id = BufferId::new(buf);
         let send = handle.registered_update_ready_senders.get(&id);
 
         if let Some(send) = send {
@@ -182,23 +250,12 @@ impl Handle {
         (user_data as *mut Handle).as_ref().unwrap()
     }
 
-    /// Takes a handle that has just been connected. Polls until ready.
-    fn new(handle_sys: evdi_handle, device_config: DeviceConfig, ready_timeout: Duration) -> Self {
-        let poll_fd = unsafe { evdi_get_event_ready(handle_sys) };
-        poll(
-            &mut [pollfd {
-                fd: poll_fd,
-                events: POLLIN,
-                revents: 0,
-            }],
-            Some(ready_timeout),
-        )
-        .unwrap();
-
+    /// Takes a handle that has just been connected and polled until ready.
+    fn new(handle_sys: evdi_handle, device_config: DeviceConfig) -> Self {
         let (mode_sender, mode) = channel();
 
         Self {
-            handle: handle_sys,
+            sys: handle_sys,
             device_config,
             registered_update_ready_senders: HashMap::new(),
             mode,
@@ -210,15 +267,15 @@ impl Handle {
 impl Drop for Handle {
     fn drop(&mut self) {
         unsafe {
-            evdi_disconnect(self.handle);
-            evdi_close(self.handle);
+            evdi_disconnect(self.sys);
+            evdi_close(self.sys);
         }
     }
 }
 
 impl PartialEq for Handle {
     fn eq(&self, other: &Self) -> bool {
-        self.handle == other.handle
+        self.sys == other.sys
     }
 }
 
@@ -232,190 +289,13 @@ pub enum RequestUpdateError {
     BufferAttachedToDifferentHandle,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct BufferId(i32);
-
-// TODO: Generate randomly?
-impl BufferId {
-    pub fn new(id: i32) -> BufferId {
-        BufferId(id)
-    }
-}
-
-#[derive(Debug)]
-pub struct Buffer {
-    pub id: BufferId,
-    attached_to: Option<evdi_handle>,
-    update_ready: Receiver<()>,
-    send_update_ready: Sender<()>,
-    buffer: Box<[u8]>,
-    rects: Box<[evdi_rect]>,
-    num_rects: i32,
-    pub width: usize,
-    pub height: usize,
-    pub stride: usize,
-}
-
-/// Can't have more than 16
-/// see <https://displaylink.github.io/evdi/details/#grabbing-pixels>
-const MAX_RECTS_BUFFER_LEN: usize = 16;
-
-const BGRA_DEPTH: usize = 4;
-
-impl Buffer {
-    /// Allocate a buffer to store the screen of a device with a specific mode.
-    pub fn new(id: BufferId, mode: &evdi_mode) -> Self {
-        let width = mode.width as usize;
-        let height = mode.height as usize;
-        let bits_per_pixel = mode.bits_per_pixel as usize;
-        let stride = bits_per_pixel / 8 * width;
-
-        // NOTE: We use a boxed slice to prevent accidental re-allocation
-        let buffer = vec![0u8; height * stride].into_boxed_slice();
-        let rects = vec![
-            evdi_rect {
-                x1: 0,
-                y1: 0,
-                x2: 0,
-                y2: 0,
-            };
-            MAX_RECTS_BUFFER_LEN
-        ]
-        .into_boxed_slice();
-
-        let (send_update_ready, update_ready) = channel();
-
-        Buffer {
-            id,
-            attached_to: None,
-            update_ready,
-            send_update_ready,
-            buffer,
-            rects,
-            num_rects: -1,
-            width,
-            height,
-            stride,
-        }
-    }
-
-    /// Get a reference to the underlying bytes of this buffer.
-    ///
-    /// Use [`Buffer.width`], [`Buffer.height`], and [`Buffer.stride`] to interpret this.
-    ///
-    /// I believe this is in the format BGRA32. Some toy examples by other users assume that format.
-    /// I've filed [an issue][issue] on the wrapped library to clarify this.
-    ///
-    /// [issue]: https://github.com/DisplayLink/evdi/issues/266
-    pub fn bytes(&self) -> &[u8] {
-        self.buffer.as_ref()
-    }
-
-    /// Write the pixels to a file in the unoptimized image format [PPM].
-    ///
-    /// This is useful when debugging, as you can open the file in an image viewer and see if the
-    /// buffer is processed correctly.
-    ///
-    /// [PPM]: http://netpbm.sourceforge.net/doc/ppm.html
-    pub fn debug_write_to_ppm(&self, f: &mut File) -> io::Result<()> {
-        Self::write_line(f, "P6\n")?;
-        Self::write_line(f, format!("{}\n", self.width.to_string()))?;
-        Self::write_line(f, format!("{}\n", self.height.to_string()))?;
-        Self::write_line(f, "255\n")?;
-
-        for row in self.buffer.chunks_exact(self.stride) {
-            for pixel in row[0..self.width].chunks_exact(BGRA_DEPTH) {
-                let b = pixel[0];
-                let g = pixel[1];
-                let r = pixel[2];
-                let _a = pixel[3];
-
-                f.write_all(&[r, g, b])?;
+impl From<BufferAttachmentError> for RequestUpdateError {
+    fn from(err: BufferAttachmentError) -> Self {
+        match err {
+            BufferAttachmentError::AlreadyToOther => {
+                RequestUpdateError::BufferAttachedToDifferentHandle
             }
         }
-
-        f.flush()?;
-
-        Ok(())
-    }
-
-    fn write_line<S: AsRef<str>>(f: &mut File, line: S) -> io::Result<()> {
-        f.write_all(line.as_ref().as_bytes())?;
-        Ok(())
-    }
-
-    fn sys(&self) -> evdi_buffer {
-        evdi_buffer {
-            id: self.id.0,
-            buffer: self.buffer.as_ptr() as *mut c_void,
-            width: self.width as c_int,
-            height: self.height as c_int,
-            stride: self.stride as c_int,
-            rects: self.rects.as_ptr() as *mut evdi_rect,
-            rect_count: 0,
-        }
-    }
-}
-
-impl Drop for Buffer {
-    fn drop(&mut self) {
-        if let Some(handle) = self.attached_to.as_ref() {
-            // NOTE: We don't unregister the channel from the handle because of the onerous changes
-            // it would require us to make to our api surface.
-            unsafe { evdi_unregister_buffer(*handle, self.id.0) };
-        }
-    }
-}
-
-/// Automatically closed on drop
-#[derive(Debug)]
-pub struct UnconnectedHandle {
-    handle: evdi_handle,
-}
-
-impl UnconnectedHandle {
-    /// Connect to an handle and block until ready.
-    ///
-    /// ```
-    /// # use evdi::device_node::DeviceNode;
-    /// # use evdi::device_config::DeviceConfig;
-    /// # use std::time::Duration;
-    /// let device: DeviceNode = DeviceNode::get().unwrap();
-    /// let handle = device
-    ///     .open().unwrap()
-    ///     .connect(&DeviceConfig::sample(), Duration::from_secs(1));
-    /// ```
-    pub fn connect(self, config: &DeviceConfig, ready_timeout: Duration) -> Handle {
-        // NOTE: We deliberately take ownership to ensure a handle is connected at most once.
-
-        let config: DeviceConfig = config.to_owned();
-        let edid = Box::leak(Box::new(config.edid()));
-        unsafe {
-            evdi_connect(
-                self.handle,
-                edid.as_ptr(),
-                edid.len() as c_uint,
-                config.sku_area_limit(),
-            );
-        }
-
-        let sys = self.handle;
-
-        // Avoid running the destructor, which would close the underlying handle
-        // Since we are stack-allocated we still get cleaned up
-        forget(self);
-
-        Handle::new(sys, config, ready_timeout)
-    }
-
-    pub(crate) fn new(handle: evdi_handle) -> Self {
-        Self { handle }
-    }
-}
-
-impl Drop for UnconnectedHandle {
-    fn drop(&mut self) {
-        unsafe { evdi_close(self.handle) };
     }
 }
 
@@ -427,54 +307,40 @@ mod tests {
     use crate::device_node::DeviceNode;
 
     use super::*;
+    use std::fs::File;
 
     const TIMEOUT: Duration = Duration::from_secs(1);
 
-    fn connect() -> Handle {
+    fn handle_fixture() -> Handle {
         DeviceNode::get()
             .unwrap()
             .open()
             .unwrap()
             .connect(&DeviceConfig::sample(), TIMEOUT)
+            .unwrap()
     }
 
     #[test]
     fn can_connect() {
-        connect();
+        handle_fixture();
     }
 
     #[test]
     fn can_enable_cursor_events() {
-        connect().enable_cursor_events(true);
+        handle_fixture().enable_cursor_events(true);
     }
 
     #[test]
     fn can_receive_mode() {
-        let handle = connect();
+        let handle = handle_fixture();
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
         assert!(mode.height > 100);
     }
 
     #[test]
-    fn can_create_buffer() {
-        let handle = connect();
-        handle.request_events();
-        let mode = handle.receive_mode(TIMEOUT).unwrap();
-        Buffer::new(BufferId(1), &mode);
-    }
-
-    #[test]
-    fn can_access_buffer_sys() {
-        let handle = connect();
-        handle.request_events();
-        let mode = handle.receive_mode(TIMEOUT).unwrap();
-        Buffer::new(BufferId(1), &mode).sys();
-    }
-
-    #[test]
     fn update_can_be_called_multiple_times() {
-        let mut handle = connect();
+        let mut handle = handle_fixture();
 
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
@@ -503,7 +369,7 @@ mod tests {
 
     #[test]
     fn bytes_is_non_empty() {
-        let mut handle = connect();
+        let mut handle = handle_fixture();
         let buf = get_update(&mut handle);
 
         let mut total: u32 = 0;
@@ -524,7 +390,7 @@ mod tests {
 
     #[test]
     fn can_output_debug() {
-        let mut handle = connect();
+        let mut handle = handle_fixture();
         let buf = get_update(&mut handle);
 
         let mut f = File::with_options()
@@ -538,11 +404,13 @@ mod tests {
 
     #[test]
     fn can_disconnect() {
-        let mut handle = connect();
+        let mut handle = handle_fixture();
 
         for _ in 0..10 {
             let unconnected = handle.disconnect();
-            handle = unconnected.connect(&DeviceConfig::sample(), TIMEOUT);
+            handle = unconnected
+                .connect(&DeviceConfig::sample(), TIMEOUT)
+                .unwrap();
         }
     }
 }

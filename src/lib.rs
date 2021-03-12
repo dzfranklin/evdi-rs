@@ -11,6 +11,7 @@ use evdi_sys::*;
 use lazy_static::lazy_static;
 use regex::Regex;
 
+pub mod buffer;
 pub mod device_config;
 pub mod device_node;
 pub mod handle;
@@ -176,10 +177,10 @@ mod tests {
 
         set_logging(move |msg| send.send(msg).unwrap());
 
-        DeviceNode::get().unwrap().open(); // Generate a log msg
+        DeviceNode::get().unwrap().open().unwrap(); // Generate a log msg
         recv.recv().unwrap(); // Block until we receive the msg
 
-        DeviceNode::get().unwrap().open(); // Generate a log msg
+        DeviceNode::get().unwrap().open().unwrap(); // Generate a log msg
         recv.recv().unwrap(); // Block until we receive the msg
     }
 
