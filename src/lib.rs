@@ -164,6 +164,8 @@ impl LibVersion {
     }
 }
 
+pub type Mode = evdi_mode;
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc::channel;

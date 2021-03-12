@@ -1,3 +1,4 @@
+use crate::Mode;
 use evdi_sys::*;
 use std::fs::File;
 use std::io;
@@ -42,7 +43,7 @@ const BGRA_DEPTH: usize = 4;
 
 impl Buffer {
     /// Allocate a buffer to store the screen of a device with a specific mode.
-    pub fn new(id: BufferId, mode: &evdi_mode) -> Self {
+    pub fn new(id: BufferId, mode: &Mode) -> Self {
         let width = mode.width as usize;
         let height = mode.height as usize;
         let bits_per_pixel = mode.bits_per_pixel as usize;

@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use crate::buffer::*;
 use crate::device_config::DeviceConfig;
+use crate::Mode;
 
 /// Represents a handle that is open but not connected.
 #[derive(Debug)]
@@ -94,8 +95,8 @@ pub struct Handle {
     device_config: DeviceConfig,
     // NOTE: Not cleaned up on buffer deregister
     registered_update_ready_senders: HashMap<BufferId, Sender<()>>,
-    mode: Receiver<evdi_mode>,
-    mode_sender: Sender<evdi_mode>,
+    mode: Receiver<Mode>,
+    mode_sender: Sender<Mode>,
 }
 
 impl Handle {
@@ -198,7 +199,7 @@ impl Handle {
     ///
     /// let mode = handle.receive_mode(timeout).unwrap();
     /// ```
-    pub fn receive_mode(&self, timeout: Duration) -> Result<evdi_mode, RecvTimeoutError> {
+    pub fn receive_mode(&self, timeout: Duration) -> Result<Mode, RecvTimeoutError> {
         self.mode.recv_timeout(timeout)
     }
 
@@ -220,7 +221,7 @@ impl Handle {
     ///     // use the mode
     /// }
     /// ```
-    pub fn try_receive_mode(&self) -> Option<evdi_mode> {
+    pub fn try_receive_mode(&self) -> Option<Mode> {
         self.mode.try_recv().ok()
     }
 
@@ -236,7 +237,7 @@ impl Handle {
         UnconnectedHandle::new(sys)
     }
 
-    extern "C" fn mode_changed_handler_caller(mode: evdi_mode, user_data: *mut c_void) {
+    extern "C" fn mode_changed_handler_caller(mode: Mode, user_data: *mut c_void) {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
         if let Err(err) = handle.mode_sender.send(mode) {
             eprintln!(
