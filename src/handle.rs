@@ -202,6 +202,28 @@ impl Handle {
         self.mode.recv_timeout(timeout)
     }
 
+    /// Returns a mode event if one is currently available without blocking.
+    ///
+    /// A mode event will not be received unless [`Self::request_events`] has been called.
+    ///
+    /// ```
+    /// # use evdi::device_node::DeviceNode;
+    /// # use evdi::device_config::DeviceConfig;
+    /// # use std::time::Duration;
+    /// # let device: DeviceNode = DeviceNode::get().unwrap();
+    /// # let timeout = Duration::from_secs(1);
+    /// # let mut handle = device.open().unwrap()
+    /// #   .connect(&DeviceConfig::sample(), timeout).unwrap();
+    /// handle.request_events();
+    ///
+    /// if let Some(mode) = handle.try_receive_mode() {
+    ///     // use the mode
+    /// }
+    /// ```
+    pub fn try_receive_mode(&self) -> Option<evdi_mode> {
+        self.mode.try_recv().ok()
+    }
+
     pub fn disconnect(self) -> UnconnectedHandle {
         let sys = self.sys;
 
@@ -412,5 +434,11 @@ mod tests {
                 .connect(&DeviceConfig::sample(), TIMEOUT)
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn try_receive_returns_none_initially() {
+        let handle = handle_fixture();
+        assert!(handle.try_receive_mode().is_none());
     }
 }
