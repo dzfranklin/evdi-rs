@@ -6,7 +6,7 @@
 //!
 //! This library is alpha quality. If your display starts behaving weirdly, rebooting may help.
 //!
-//! The underlying library this wraps handles errors loosly by. Many errors are handled by logging
+//! The underlying library this wraps handles errors loosly. Many errors are handled by logging
 //! a message and continuing. This wrapper only adds error information when doing so is easy. Normal
 //! usage of this api may lead to silent failures or crashes.
 //!
