@@ -9,7 +9,7 @@ use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct BufferId(i32);
+pub(crate) struct BufferId(i32);
 
 impl BufferId {
     pub fn generate() -> Self {
@@ -28,7 +28,7 @@ impl BufferId {
 
 #[derive(Debug)]
 pub struct Buffer {
-    pub id: BufferId,
+    pub(crate) id: BufferId,
     attached_to: Option<evdi_handle>,
     update_ready: Receiver<()>,
     send_update_ready: Sender<()>,

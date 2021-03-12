@@ -105,7 +105,7 @@ impl Handle {
     /// Blocks until the update is complete.
     ///
     /// ```
-    /// # use evdi::{device_node::DeviceNode, device_config::DeviceConfig, buffer::{Buffer, BufferId}};
+    /// # use evdi::{device_node::DeviceNode, device_config::DeviceConfig, buffer::Buffer};
     /// # use std::time::Duration;
     /// # let timeout = Duration::from_secs(1);
     /// # let mut handle = DeviceNode::get().unwrap().open().unwrap()
