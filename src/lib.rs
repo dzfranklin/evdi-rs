@@ -7,6 +7,7 @@ use std::io::Read;
 use std::option::NoneError;
 use std::os::raw::{c_char, c_void};
 
+pub use evdi_sys;
 use evdi_sys::*;
 use lazy_static::lazy_static;
 use regex::Regex;
