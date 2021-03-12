@@ -1,5 +1,6 @@
 use crate::Mode;
 use evdi_sys::*;
+use rand::Rng;
 use std::fs::File;
 use std::io;
 use std::io::Write;
@@ -10,9 +11,13 @@ use std::time::Duration;
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct BufferId(i32);
 
-// TODO: Generate randomly?
 impl BufferId {
-    pub fn new(id: i32) -> BufferId {
+    pub fn generate() -> Self {
+        let id = rand::thread_rng().gen();
+        Self::new(id)
+    }
+
+    pub(crate) fn new(id: i32) -> BufferId {
         BufferId(id)
     }
 
@@ -43,7 +48,7 @@ const BGRA_DEPTH: usize = 4;
 
 impl Buffer {
     /// Allocate a buffer to store the screen of a device with a specific mode.
-    pub fn new(id: BufferId, mode: &Mode) -> Self {
+    pub fn new(mode: &Mode) -> Self {
         let width = mode.width as usize;
         let height = mode.height as usize;
         let bits_per_pixel = mode.bits_per_pixel as usize;
@@ -65,7 +70,7 @@ impl Buffer {
         let (send_update_ready, update_ready) = channel();
 
         Buffer {
-            id,
+            id: BufferId::generate(),
             attached_to: None,
             update_ready,
             send_update_ready,
@@ -210,7 +215,7 @@ pub mod tests {
         let handle = handle_fixture();
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
-        Buffer::new(BufferId(1), &mode);
+        Buffer::new(&mode);
     }
 
     #[test]
@@ -218,6 +223,6 @@ pub mod tests {
         let handle = handle_fixture();
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
-        Buffer::new(BufferId(1), &mode).sys();
+        Buffer::new(&mode).sys();
     }
 }

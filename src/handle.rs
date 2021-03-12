@@ -112,7 +112,7 @@ impl Handle {
     /// #     .connect(&DeviceConfig::sample(), timeout).unwrap();
     /// # handle.request_events();
     /// # let mode = handle.receive_mode(timeout).unwrap();
-    /// let mut buf = Buffer::new(BufferId::new(1), &mode);
+    /// let mut buf = Buffer::new(&mode);
     /// handle.request_update(&mut buf, timeout).unwrap();
     /// ```
     pub fn request_update(
@@ -368,7 +368,7 @@ mod tests {
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
 
-        let mut buf = Buffer::new(BufferId::new(1), &mode);
+        let mut buf = Buffer::new(&mode);
 
         for _ in 0..10 {
             {
@@ -380,7 +380,7 @@ mod tests {
     fn get_update(handle: &mut Handle) -> Buffer {
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
-        let mut buf = Buffer::new(BufferId::new(1), &mode);
+        let mut buf = Buffer::new(&mode);
 
         // Give us some time to settle
         for _ in 0..20 {

@@ -18,3 +18,4 @@ lazy_static = "1.4.0"
 thiserror = "1.0.24"
 filedescriptor = "0.7.3"
 anyhow = "1.0.38" # needed only to wrap the error type of filedescriptor, which is just anyhow::Error
+rand = "0.8.3"
