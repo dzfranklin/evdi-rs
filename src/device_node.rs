@@ -9,7 +9,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use thiserror::Error;
 
-use crate::handle::UnconnectedHandle;
+use crate::prelude::*;
 
 const DEVICE_CARDS_DIR: &str = "/dev/dri";
 const REMOVE_ALL_FILE: &str = "/sys/devices/evdi/remove_all";

@@ -15,11 +15,12 @@ pub mod buffer;
 pub mod device_config;
 pub mod device_node;
 pub mod handle;
+pub mod prelude;
 
 /// Check the status of the evdi kernel module for compatibility with this library version.
 ///
 /// ```
-/// # use evdi::{check_kernel_mod, KernelModStatus};
+/// # use evdi::prelude::*;
 /// match check_kernel_mod() {
 ///     KernelModStatus::NotInstalled => {
 ///         println!("You need to install the evdi kernel module");
@@ -57,7 +58,7 @@ pub enum KernelModStatus {
 /// The callback is per-client.
 ///
 /// ```
-/// # use evdi::set_logging;
+/// # use evdi::prelude::*;
 /// set_logging(|msg| println!("{}", msg));
 /// ```
 pub fn set_logging<F>(cb: F)
@@ -170,7 +171,7 @@ pub type Mode = evdi_mode;
 mod tests {
     use std::sync::mpsc::channel;
 
-    use crate::device_node::DeviceNode;
+    use crate::prelude::*;
     use crate::*;
 
     #[test]

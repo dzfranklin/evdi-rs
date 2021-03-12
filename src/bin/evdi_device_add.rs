@@ -1,4 +1,4 @@
-use evdi::device_node::DeviceNode;
+use evdi::prelude::*;
 
 fn main() {
     let succeeded = DeviceNode::add();

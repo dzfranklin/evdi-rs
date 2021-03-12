@@ -1,4 +1,4 @@
-use crate::Mode;
+use crate::prelude::*;
 use evdi_sys::*;
 use rand::Rng;
 use std::fs::File;
@@ -194,9 +194,6 @@ pub(crate) enum BufferAttachmentError {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::device_config::DeviceConfig;
-    use crate::device_node::DeviceNode;
-    use crate::handle::Handle;
     use std::time::Duration;
 
     const TIMEOUT: Duration = Duration::from_secs(1);

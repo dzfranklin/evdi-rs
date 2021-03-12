@@ -8,9 +8,8 @@ use evdi_sys::*;
 use filedescriptor::{poll, pollfd, POLLIN};
 use thiserror::Error;
 
-use crate::buffer::*;
-use crate::device_config::DeviceConfig;
-use crate::Mode;
+use crate::buffer::{BufferAttachmentError, BufferId};
+use crate::prelude::*;
 
 /// Represents a handle that is open but not connected.
 #[derive(Debug)]
@@ -22,8 +21,7 @@ impl UnconnectedHandle {
     /// Connect to an handle and block until ready.
     ///
     /// ```
-    /// # use evdi::device_node::DeviceNode;
-    /// # use evdi::device_config::DeviceConfig;
+    /// # use evdi::prelude::*;
     /// # use std::time::Duration;
     /// let device: DeviceNode = DeviceNode::get().unwrap();
     /// let handle = device
@@ -105,7 +103,7 @@ impl Handle {
     /// Blocks until the update is complete.
     ///
     /// ```
-    /// # use evdi::{device_node::DeviceNode, device_config::DeviceConfig, buffer::Buffer};
+    /// # use evdi::prelude::*;
     /// # use std::time::Duration;
     /// # let timeout = Duration::from_secs(1);
     /// # let mut handle = DeviceNode::get().unwrap().open().unwrap()
@@ -188,8 +186,7 @@ impl Handle {
     /// A mode event will not be received unless [`Self::request_events`] is called.
     ///
     /// ```
-    /// # use evdi::device_node::DeviceNode;
-    /// # use evdi::device_config::DeviceConfig;
+    /// # use evdi::prelude::*;
     /// # use std::time::Duration;
     /// # let device: DeviceNode = DeviceNode::get().unwrap();
     /// # let timeout = Duration::from_secs(1);
@@ -208,8 +205,7 @@ impl Handle {
     /// A mode event will not be received unless [`Self::request_events`] has been called.
     ///
     /// ```
-    /// # use evdi::device_node::DeviceNode;
-    /// # use evdi::device_config::DeviceConfig;
+    /// # use evdi::prelude::*;
     /// # use std::time::Duration;
     /// # let device: DeviceNode = DeviceNode::get().unwrap();
     /// # let timeout = Duration::from_secs(1);
@@ -325,9 +321,6 @@ impl From<BufferAttachmentError> for RequestUpdateError {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
-
-    use crate::device_config::DeviceConfig;
-    use crate::device_node::DeviceNode;
 
     use super::*;
     use std::fs::File;
