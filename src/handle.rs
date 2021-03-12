@@ -32,10 +32,10 @@ impl Handle {
     /// Blocks until the update is complete.
     ///
     /// ```
-    /// # use evdi::{device::Device, device_config::DeviceConfig, handle::{Buffer, BufferId}};
+    /// # use evdi::{device_node::DeviceNode, device_config::DeviceConfig, handle::{Buffer, BufferId}};
     /// # use std::time::Duration;
     /// # let timeout = Duration::from_secs(1);
-    /// # let mut handle = Device::get().unwrap().open().unwrap()
+    /// # let mut handle = DeviceNode::get().unwrap().open().unwrap()
     /// #     .connect(&DeviceConfig::sample(), timeout);
     /// # handle.request_events();
     /// # let mode = handle.receive_mode(timeout).unwrap();
@@ -119,10 +119,10 @@ impl Handle {
     /// A mode event will not be received unless [`Self::request_events`] is called.
     ///
     /// ```
-    /// # use evdi::device::Device;
+    /// # use evdi::device_node::DeviceNode;
     /// # use evdi::device_config::DeviceConfig;
     /// # use std::time::Duration;
-    /// # let device: Device = Device::get().unwrap();
+    /// # let device: DeviceNode = DeviceNode::get().unwrap();
     /// # let timeout = Duration::from_secs(1);
     /// # let mut handle = device.open().unwrap()
     /// #   .connect(&DeviceConfig::sample(), timeout);
@@ -377,10 +377,10 @@ impl UnconnectedHandle {
     /// Connect to an handle and block until ready.
     ///
     /// ```
-    /// # use evdi::device::Device;
+    /// # use evdi::device_node::DeviceNode;
     /// # use evdi::device_config::DeviceConfig;
     /// # use std::time::Duration;
-    /// let device: Device = Device::get().unwrap();
+    /// let device: DeviceNode = DeviceNode::get().unwrap();
     /// let handle = device
     ///     .open().unwrap()
     ///     .connect(&DeviceConfig::sample(), Duration::from_secs(1));
@@ -423,15 +423,15 @@ impl Drop for UnconnectedHandle {
 mod tests {
     use std::time::Duration;
 
-    use crate::device::Device;
     use crate::device_config::DeviceConfig;
+    use crate::device_node::DeviceNode;
 
     use super::*;
 
     const TIMEOUT: Duration = Duration::from_secs(1);
 
     fn connect() -> Handle {
-        Device::get()
+        DeviceNode::get()
             .unwrap()
             .open()
             .unwrap()

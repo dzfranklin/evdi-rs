@@ -11,8 +11,8 @@ use evdi_sys::*;
 use lazy_static::lazy_static;
 use regex::Regex;
 
-pub mod device;
 pub mod device_config;
+pub mod device_node;
 pub mod handle;
 
 /// Check the status of the evdi kernel module for compatibility with this library version.
@@ -167,7 +167,7 @@ impl LibVersion {
 mod tests {
     use std::sync::mpsc::channel;
 
-    use crate::device::Device;
+    use crate::device_node::DeviceNode;
     use crate::*;
 
     #[test]
@@ -176,10 +176,10 @@ mod tests {
 
         set_logging(move |msg| send.send(msg).unwrap());
 
-        Device::get().unwrap().open(); // Generate a log msg
+        DeviceNode::get().unwrap().open(); // Generate a log msg
         recv.recv().unwrap(); // Block until we receive the msg
 
-        Device::get().unwrap().open(); // Generate a log msg
+        DeviceNode::get().unwrap().open(); // Generate a log msg
         recv.recv().unwrap(); // Block until we receive the msg
     }
 

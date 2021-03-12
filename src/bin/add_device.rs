@@ -1,7 +1,7 @@
-use evdi::device::Device;
+use evdi::device_node::DeviceNode;
 
 fn main() {
-    let succeeded = Device::add();
+    let succeeded = DeviceNode::add();
     if !succeeded {
         panic!("Failed to add device. Did you run with superuser permissions?");
     }

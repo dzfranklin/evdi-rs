@@ -16,11 +16,11 @@ const REMOVE_ALL_FILE: &str = "/sys/devices/evdi/remove_all";
 
 /// Represents a device node (`/dev/dri/card*`).
 #[derive(Debug, PartialEq, Eq)]
-pub struct Device {
+pub struct DeviceNode {
     id: i32,
 }
 
-impl Device {
+impl DeviceNode {
     /// Returns an evdi device node if one is available.
     ///
     /// If no device is available you will need to run Device::add() with superuser permissions.
@@ -33,9 +33,9 @@ impl Device {
     }
 
     /// Check if a device node is an evdi device node, is a different device node, or doesn't exist.
-    pub fn status(&self) -> DeviceStatus {
+    pub fn status(&self) -> DeviceNodeStatus {
         let sys = unsafe { evdi_check_device(self.id) };
-        DeviceStatus::from(sys)
+        DeviceNodeStatus::from(sys)
     }
 
     /// Open an evdi device node.
@@ -45,9 +45,9 @@ impl Device {
     pub fn open(&self) -> Result<UnconnectedHandle, OpenDeviceError> {
         // NOTE: Opening invalid devices can be very slow (~10sec on my laptop), so we check first
         match self.status() {
-            DeviceStatus::Unrecognized => Err(OpenDeviceError::NotEvdiDevice),
-            DeviceStatus::NotPresent => Err(OpenDeviceError::NonexistentDevice),
-            DeviceStatus::Available => {
+            DeviceNodeStatus::Unrecognized => Err(OpenDeviceError::NotEvdiDevice),
+            DeviceNodeStatus::NotPresent => Err(OpenDeviceError::NonexistentDevice),
+            DeviceNodeStatus::Available => {
                 let sys = unsafe { evdi_open(self.id) };
                 if !sys.is_null() {
                     Ok(UnconnectedHandle::new(sys))
@@ -64,7 +64,7 @@ impl Device {
             static ref RE: Regex = Regex::new(r"^card([0-9]+)$").unwrap();
         }
 
-        let mut devices: Vec<Device> = vec![];
+        let mut devices: Vec<DeviceNode> = vec![];
 
         for entry in fs::read_dir(DEVICE_CARDS_DIR)? {
             let name_os = entry?.file_name();
@@ -75,13 +75,13 @@ impl Device {
                 .and_then(|id| id.as_str().parse::<i32>().ok());
 
             if let Some(id) = id {
-                devices.push(Device::new(id))
+                devices.push(DeviceNode::new(id))
             }
         }
 
-        let mut available: Vec<Device> = devices
+        let mut available: Vec<DeviceNode> = devices
             .into_iter()
-            .filter(|device| device.status() == DeviceStatus::Available)
+            .filter(|device| device.status() == DeviceNodeStatus::Available)
             .collect();
 
         available.sort();
@@ -110,17 +110,17 @@ impl Device {
     ///
     /// This does not create the device or check if the device exists.
     pub fn new(id: i32) -> Self {
-        Device { id }
+        DeviceNode { id }
     }
 }
 
-impl Ord for Device {
+impl Ord for DeviceNode {
     fn cmp(&self, other: &Self) -> Ordering {
         self.id.cmp(&other.id)
     }
 }
 
-impl PartialOrd for Device {
+impl PartialOrd for DeviceNode {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -128,7 +128,7 @@ impl PartialOrd for Device {
 
 /// Status of a [Device]
 #[derive(Debug, PartialEq)]
-pub enum DeviceStatus {
+pub enum DeviceNodeStatus {
     Available,
     Unrecognized,
     NotPresent,
@@ -144,15 +144,15 @@ pub enum OpenDeviceError {
     Unknown,
 }
 
-impl DeviceStatus {
+impl DeviceNodeStatus {
     /// * `sys` - evdi_device_status
     ///
     /// Panics on unrecognized sys.
     fn from(sys: c_uint) -> Self {
         match sys {
-            EVDI_STATUS_AVAILABLE => DeviceStatus::Available,
-            EVDI_STATUS_UNRECOGNIZED => DeviceStatus::Unrecognized,
-            EVDI_STATUS_NOT_PRESENT => DeviceStatus::NotPresent,
+            EVDI_STATUS_AVAILABLE => DeviceNodeStatus::Available,
+            EVDI_STATUS_UNRECOGNIZED => DeviceNodeStatus::Unrecognized,
+            EVDI_STATUS_NOT_PRESENT => DeviceNodeStatus::NotPresent,
             _ => panic!("Invalid device status {}", sys),
         }
     }
@@ -164,49 +164,49 @@ mod tests {
 
     #[test]
     fn default_device_is_not_evdi() {
-        let status = Device::new(0).status();
-        assert_eq!(status, DeviceStatus::Unrecognized);
+        let status = DeviceNode::new(0).status();
+        assert_eq!(status, DeviceNodeStatus::Unrecognized);
     }
 
     #[test]
     fn nonexistent_device_has_proper_status() {
-        let status = Device::new(4200).status();
-        assert_eq!(status, DeviceStatus::NotPresent);
+        let status = DeviceNode::new(4200).status();
+        assert_eq!(status, DeviceNodeStatus::NotPresent);
     }
 
     #[test]
     fn add_fails_without_superuser() {
-        let result = Device::add();
+        let result = DeviceNode::add();
         assert_eq!(result, false);
     }
 
     #[test]
     fn remove_all_fails_without_superuser() {
-        let result = Device::remove_all();
+        let result = DeviceNode::remove_all();
         assert!(result.is_err())
     }
 
     #[test]
     fn list_available_contains_at_least_one_device() {
-        let results = Device::list_available().unwrap();
+        let results = DeviceNode::list_available().unwrap();
         assert!(!results.is_empty(), "No available devices. Have you added at least one device by running the binary add_device at least once?");
     }
 
     #[test]
     fn get_returns_a_device() {
-        let result = Device::get();
+        let result = DeviceNode::get();
         assert!(result.is_some());
     }
 
     #[test]
     fn can_open() {
-        let device = Device::get().unwrap();
+        let device = DeviceNode::get().unwrap();
         device.open().unwrap();
     }
 
     #[test]
     fn opening_nonexistent_device_fails() {
-        let device = Device::new(4200);
+        let device = DeviceNode::new(4200);
         match device.open() {
             Err(OpenDeviceError::NonexistentDevice) => (),
             _ => panic!(),
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn opening_non_evdi_device_fails() {
-        let device = Device::new(0);
+        let device = DeviceNode::new(0);
         match device.open() {
             Err(OpenDeviceError::NotEvdiDevice) => (),
             _ => panic!(),
