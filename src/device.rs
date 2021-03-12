@@ -9,6 +9,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::handle::UnconnectedHandle;
+use std::ptr::null;
 
 const DEVICE_CARDS_DIR: &str = "/dev/dri";
 const REMOVE_ALL_FILE: &str = "/sys/devices/evdi/remove_all";
@@ -38,9 +39,13 @@ impl Device {
     }
 
     /// Open a device.
-    pub fn open(&self) -> UnconnectedHandle {
+    pub fn open(&self) -> Option<UnconnectedHandle> {
         let sys = unsafe { evdi_open(self.id) };
-        UnconnectedHandle::new(sys)
+        if !sys.is_null() {
+            Some(UnconnectedHandle::new(sys))
+        } else {
+            None
+        }
     }
 
     /// List all devices that have available status in a stable order

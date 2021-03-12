@@ -35,7 +35,8 @@ impl Handle {
     /// # use evdi::{device::Device, device_config::DeviceConfig, handle::{Buffer, BufferId}};
     /// # use std::time::Duration;
     /// # let timeout = Duration::from_secs(1);
-    /// # let mut handle = Device::get().unwrap().open().connect(&DeviceConfig::sample(), timeout);
+    /// # let mut handle = Device::get().unwrap().open().unwrap()
+    /// #     .connect(&DeviceConfig::sample(), timeout);
     /// # handle.request_events();
     /// # let mode = handle.receive_mode(timeout).unwrap();
     /// let mut buf = Buffer::new(BufferId::new(1), &mode);
@@ -123,7 +124,8 @@ impl Handle {
     /// # use std::time::Duration;
     /// # let device: Device = Device::get().unwrap();
     /// # let timeout = Duration::from_secs(1);
-    /// # let mut handle = device.open().connect(&DeviceConfig::sample(), timeout);
+    /// # let mut handle = device.open().unwrap()
+    /// #   .connect(&DeviceConfig::sample(), timeout);
     /// handle.request_events();
     ///
     /// let mode = handle.receive_mode(timeout).unwrap();
@@ -380,7 +382,7 @@ impl UnconnectedHandle {
     /// # use std::time::Duration;
     /// let device: Device = Device::get().unwrap();
     /// let handle = device
-    ///     .open()
+    ///     .open().unwrap()
     ///     .connect(&DeviceConfig::sample(), Duration::from_secs(1));
     /// ```
     pub fn connect(self, config: &DeviceConfig, ready_timeout: Duration) -> Handle {
@@ -432,6 +434,7 @@ mod tests {
         Device::get()
             .unwrap()
             .open()
+            .unwrap()
             .connect(&DeviceConfig::sample(), TIMEOUT)
     }
 
