@@ -1,8 +1,14 @@
 #![feature(with_options)]
 #![feature(try_trait)]
 
-//! Safe bindings to [evdi](https://github.com/DisplayLink/evdi), a library for managing virtual
-//! displays on linux.
+//! High-level bindings to [evdi](https://github.com/DisplayLink/evdi), a library for managing
+//! virtual displays on linux.
+//!
+//! This library is alpha quality. If your display starts behaving weirdly, rebooting may help.
+//!
+//! The underlying library this wraps handles errors loosly by. Many errors are handled by logging
+//! a message and continuing. This wrapper only adds error information when doing so is easy. Normal
+//! usage of this api may lead to silent failures or crashes.
 //!
 //! ## Basic usage
 //!
