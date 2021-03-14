@@ -1,6 +1,6 @@
 [package]
 name = "evdi"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["Daniel Franklin <daniel@danielzfranklin.org>"]
 edition = "2018"
 license = "MIT"
@@ -13,7 +13,7 @@ categories = ["os::linux-apis", "api-bindings"]
 
 [dependencies]
 evdi-sys = "0.3.0"
-drm-fourcc = "1.3.0"
+drm-fourcc = "1.3.1"
 regex = "1.4.3"
 lazy_static = "1.4.0"
 thiserror = "1.0.24"
