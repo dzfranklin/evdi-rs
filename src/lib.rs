@@ -87,6 +87,7 @@ pub mod buffer;
 pub mod device_config;
 pub mod device_node;
 pub mod handle;
+pub mod mode;
 pub mod prelude;
 
 /// Check the status of the evdi kernel module for compatibility with this library version.
@@ -238,9 +239,6 @@ impl LibVersion {
         }
     }
 }
-
-/// Display video mode data
-pub type Mode = evdi_mode;
 
 #[cfg(test)]
 mod tests {

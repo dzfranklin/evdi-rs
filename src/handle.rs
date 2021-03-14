@@ -237,9 +237,9 @@ impl Handle {
         UnconnectedHandle::new(sys)
     }
 
-    extern "C" fn mode_changed_handler_caller(mode: Mode, user_data: *mut c_void) {
+    extern "C" fn mode_changed_handler_caller(mode: evdi_mode, user_data: *mut c_void) {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
-        if let Err(err) = handle.mode_sender.send(mode) {
+        if let Err(err) = handle.mode_sender.send(mode.into()) {
             eprintln!(
                 "Dropping msg. Mode change receiver closed, but callback called: {:?}",
                 err
