@@ -135,8 +135,9 @@ impl Buffer {
         Self::write_line(f, format!("{}\n", self.height.to_string()))?;
         Self::write_line(f, "255\n")?;
 
-        for row in self.buffer.chunks_exact(self.stride) {
-            for pixel in row[0..self.width].chunks_exact(BGRA_DEPTH) {
+        for stride in self.buffer.chunks_exact(self.stride) {
+            let row = &stride[0..self.width];
+            for pixel in row.chunks_exact(BGRA_DEPTH) {
                 let b = pixel[0];
                 let g = pixel[1];
                 let r = pixel[2];
@@ -229,8 +230,9 @@ pub(crate) enum BufferAttachmentError {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use super::*;
 
     const TIMEOUT: Duration = Duration::from_secs(1);
 
