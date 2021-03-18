@@ -1,14 +1,17 @@
 //! Buffer to receive virtual screen pixels
 
-use crate::prelude::*;
-use evdi_sys::*;
-use rand::Rng;
 use std::fs::File;
 use std::io;
 use std::io::Write;
 use std::os::raw::{c_int, c_void};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
+
+use drm_fourcc::UnrecognizedFourcc;
+use evdi_sys::*;
+use rand::Rng;
+
+use crate::prelude::*;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub(crate) struct BufferId(i32);
@@ -65,6 +68,7 @@ pub struct Buffer {
     pub width: usize,
     pub height: usize,
     pub stride: usize,
+    pub pixel_format: Result<DrmFormat, UnrecognizedFourcc>,
 }
 
 /// Can't have more than 16
@@ -108,17 +112,14 @@ impl Buffer {
             width,
             height,
             stride,
+            pixel_format: mode.pixel_format.clone(),
         }
     }
 
     /// Get a reference to the underlying bytes of this buffer.
     ///
-    /// Use [`Buffer::width`], [`Buffer::height`], and [`Buffer::stride`] to interpret this.
-    ///
-    /// I believe this is in the format BGRA32. Some toy examples by other users assume that format.
-    /// I've filed [an issue][issue] on the wrapped library to clarify this.
-    ///
-    /// [issue]: https://github.com/DisplayLink/evdi/issues/266
+    /// Use [`Buffer::width`], [`Buffer::height`], [`Buffer::stride`], and [`Buffer::pixel_format`]
+    /// to interpret this.
     pub fn bytes(&self) -> &[u8] {
         self.buffer.as_ref()
     }
@@ -128,8 +129,17 @@ impl Buffer {
     /// This is useful when debugging, as you can open the file in an image viewer and see if the
     /// buffer is processed correctly.
     ///
+    /// Panics: If the pixel format isn't Xbgr8888, to simplify the implementation. This function
+    /// should therefore only be used as a debug helper where you can guarantee that your kernel
+    /// won't output in a different format.
+    ///
     /// [PPM]: http://netpbm.sourceforge.net/doc/ppm.html
     pub fn debug_write_to_ppm(&self, f: &mut File) -> io::Result<()> {
+        assert_eq!(
+            self.pixel_format.expect("Unrecognized pixel format"),
+            DrmFormat::Xrgb8888,
+            "Only xbgr8888 pixel format supported by debug_write_to_ppm"
+        );
         Self::write_line(f, "P6\n")?;
         Self::write_line(f, format!("{}\n", self.width.to_string()))?;
         Self::write_line(f, format!("{}\n", self.height.to_string()))?;
