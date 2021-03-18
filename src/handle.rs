@@ -413,11 +413,7 @@ mod tests {
         let mut handle = handle_fixture();
         let buf = get_update(&mut handle);
 
-        let mut f = File::with_options()
-            .write(true)
-            .create(true)
-            .open("TEMP_debug_rect.pnm")
-            .unwrap();
+        let mut f = File::create("TEMP_debug_rect.pnm").unwrap();
 
         buf.debug_write_to_ppm(&mut f).unwrap();
     }
