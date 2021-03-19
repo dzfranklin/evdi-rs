@@ -10,7 +10,6 @@ use evdi_sys::*;
 use filedescriptor::{poll, pollfd, POLLIN};
 use thiserror::Error;
 
-use crate::buffer::{BufferAttachmentError, BufferId};
 use crate::prelude::*;
 
 /// Represents a handle that is open but not connected.
@@ -91,13 +90,58 @@ pub enum PollReadyError {
 pub struct Handle {
     sys: evdi_handle,
     device_config: DeviceConfig,
-    // NOTE: Not cleaned up on buffer deregister
-    registered_update_ready_senders: HashMap<BufferId, Sender<()>>,
+    buffers: HashMap<BufferId, Buffer>,
     mode: Receiver<Mode>,
     mode_sender: Sender<Mode>,
 }
 
 impl Handle {
+    /// Allocate and register a buffer to store the screen of a device with a specific mode.
+    ///
+    /// You are responsible for re-creating buffers if the mode changes.
+    ///
+    /// ```
+    /// # use evdi::prelude::*;
+    /// # use std::time::Duration;
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    /// # let timeout = Duration::from_secs(1);
+    /// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
+    /// #     .connect(&DeviceConfig::sample(), timeout)?;
+    /// # handle.request_events();
+    /// # let mode = handle.receive_mode(timeout)?;
+    /// #
+    /// let buffer_id = handle.new_buffer(&mode);
+    /// let buffer_data = handle.get_buffer(buffer_id).expect("Buffer exists");
+    /// assert_eq!(buffer_data.width, mode.width as usize);
+    ///
+    /// handle.unregister_buffer(buffer_id);
+    /// assert!(handle.get_buffer(buffer_id).is_none());
+    /// # Ok(())
+    /// # }
+    pub fn new_buffer(&mut self, mode: &Mode) -> BufferId {
+        let buffer = Buffer::new(mode);
+        let id = buffer.id;
+        unsafe { evdi_register_buffer(self.sys, buffer.sys()) };
+        self.buffers.insert(id, buffer);
+        id
+    }
+
+    /// De-allocate and unregister a buffer.
+    ///
+    /// After calling this, [`Handle::get_buffer(id)`] will return `None`.
+    pub fn unregister_buffer(&mut self, id: BufferId) {
+        let removed = self.buffers.remove(&id);
+        if removed.is_some() {
+            unsafe { evdi_unregister_buffer(self.sys, id.sys()) };
+        }
+    }
+
+    /// Get buffer data, if the [`BufferId`] provided is associated with this handle.
+    pub fn get_buffer(&self, id: BufferId) -> Option<&Buffer> {
+        self.buffers.get(&id)
+    }
+
     /// Ask the kernel module to update a buffer with the current display pixels.
     ///
     /// Blocks until the update is complete.
@@ -110,12 +154,13 @@ impl Handle {
     /// #     .connect(&DeviceConfig::sample(), timeout).unwrap();
     /// # handle.request_events();
     /// # let mode = handle.receive_mode(timeout).unwrap();
-    /// let mut buf = Buffer::new(&mode);
-    /// handle.request_update(&mut buf, timeout).unwrap();
+    /// let buf_id = handle.new_buffer(&mode);
+    /// handle.request_update(buf_id, timeout).unwrap();
+    /// let buf_data = handle.get_buffer(buf_id).unwrap();
     /// ```
     pub fn request_update(
         &mut self,
-        buffer: &mut Buffer,
+        buffer_id: BufferId,
         timeout: Duration,
     ) -> Result<(), RequestUpdateError> {
         // NOTE: We need to take &mut self to ensure we can't be called concurrently. This is
@@ -125,16 +170,13 @@ impl Handle {
         //  updated.
         let user_data_sys = self as *const Handle;
         let handle_sys = self.sys;
-        let id_sys = buffer.id.sys();
 
-        let just_attached = buffer.ensure_attached_to(self.sys)?;
-        if just_attached {
-            unsafe { evdi_register_buffer(handle_sys, buffer.sys()) };
-            self.registered_update_ready_senders
-                .insert(buffer.id, buffer.update_ready_sender());
-        }
+        let buffer = self
+            .buffers
+            .get_mut(&buffer_id)
+            .ok_or(RequestUpdateError::UnregisteredBuffer)?;
 
-        let ready = unsafe { evdi_request_update(handle_sys, id_sys) };
+        let ready = unsafe { evdi_request_update(handle_sys, buffer_id.sys()) };
         if !ready {
             Self::request_events_sys(user_data_sys, handle_sys);
             buffer.block_until_update_ready(timeout)?;
@@ -142,7 +184,7 @@ impl Handle {
 
         unsafe {
             evdi_grab_pixels(
-                self.sys as *mut evdi_device_context,
+                handle_sys as *mut evdi_device_context,
                 buffer.rects_ptr_sys(),
                 buffer.rects_count_ptr_sys(),
             )
@@ -251,10 +293,10 @@ impl Handle {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
 
         let id = BufferId::new(buf);
-        let send = handle.registered_update_ready_senders.get(&id);
+        let buf = handle.buffers.get(&id);
 
-        if let Some(send) = send {
-            if let Err(err) = send.send(()) {
+        if let Some(buf) = buf {
+            if let Err(err) = buf.update_ready_sender().send(()) {
                 eprintln!(
                     "Dropping msg. Update ready receiver closed, but callback called: {:?}",
                     err
@@ -280,7 +322,7 @@ impl Handle {
         Self {
             sys: handle_sys,
             device_config,
-            registered_update_ready_senders: HashMap::new(),
+            buffers: HashMap::new(),
             mode,
             mode_sender,
         }
@@ -304,22 +346,12 @@ impl PartialEq for Handle {
 
 impl Eq for Handle {}
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Eq, PartialEq)]
 pub enum RequestUpdateError {
     #[error("Kernel chose to update async, timeout waiting for")]
     Timeout(#[from] RecvTimeoutError),
-    #[error("The buffer provided is attached to a different handle")]
-    BufferAttachedToDifferentHandle,
-}
-
-impl From<BufferAttachmentError> for RequestUpdateError {
-    fn from(err: BufferAttachmentError) -> Self {
-        match err {
-            BufferAttachmentError::AlreadyToOther => {
-                RequestUpdateError::BufferAttachedToDifferentHandle
-            }
-        }
-    }
+    #[error("The buffer provided does not exist or is attached to a different handle")]
+    UnregisteredBuffer,
 }
 
 #[cfg(test)]
@@ -365,26 +397,24 @@ mod tests {
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
 
-        let mut buf = Buffer::new(&mode);
+        let buf_id = handle.new_buffer(&mode);
 
         for _ in 0..10 {
-            {
-                handle.request_update(&mut buf, TIMEOUT).unwrap();
-            }
+            handle.request_update(buf_id, TIMEOUT).unwrap();
         }
     }
 
-    fn get_update(handle: &mut Handle) -> Buffer {
+    fn get_update(handle: &mut Handle) -> &Buffer {
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
-        let mut buf = Buffer::new(&mode);
+        let buf_id = handle.new_buffer(&mode);
 
         // Give us some time to settle
         for _ in 0..20 {
-            handle.request_update(&mut buf, TIMEOUT).unwrap();
+            handle.request_update(buf_id, TIMEOUT).unwrap();
         }
 
-        buf
+        handle.get_buffer(buf_id).unwrap()
     }
 
     #[test]
@@ -434,5 +464,17 @@ mod tests {
     fn try_receive_returns_none_initially() {
         let handle = handle_fixture();
         assert!(handle.try_receive_mode().is_none());
+    }
+
+    #[test]
+    fn cannot_get_buffer_after_unregister() {
+        let mut handle = handle_fixture();
+        handle.request_events();
+        let mode = handle.receive_mode(TIMEOUT).unwrap();
+
+        let buf = handle.new_buffer(&mode);
+        handle.unregister_buffer(buf);
+        let res = handle.request_update(buf, TIMEOUT);
+        assert_eq!(res.unwrap_err(), RequestUpdateError::UnregisteredBuffer);
     }
 }

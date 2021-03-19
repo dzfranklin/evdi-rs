@@ -37,11 +37,12 @@
 //!
 //! // For simplicity, we only use one buffer. You may want to use more than one buffer so that you
 //! // can send the contents of one buffer while updating another.
-//! let mut buf = Buffer::new(&mode);
+//! let buffer_id = handle.new_buffer(&mode);
 //!
 //! # let mut loop_count = 0;
 //! loop {
-//!     handle.request_update(&mut buf, UPDATE_BUFFER_TIMEOUT)?;
+//!     handle.request_update(buffer_id, UPDATE_BUFFER_TIMEOUT)?;
+//!     let buf = handle.get_buffer(buffer_id).expect("Buffer exists");
 //!     // Do something with the bytes
 //!     let _bytes = buf.bytes();
 //! #

@@ -14,10 +14,10 @@ use rand::Rng;
 use crate::prelude::*;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub(crate) struct BufferId(i32);
+pub struct BufferId(i32);
 
 impl BufferId {
-    pub fn generate() -> Self {
+    pub(crate) fn generate() -> Self {
         let id = rand::thread_rng().gen();
         Self::new(id)
     }
@@ -40,26 +40,33 @@ pub struct Buffer {
     /// ```
     /// # use evdi::prelude::*;
     /// # use std::time::Duration;
-    /// # let timeout = Duration::from_secs(1);
-    /// # let mut handle = DeviceNode::get().unwrap().open().unwrap()
-    /// #     .connect(&DeviceConfig::sample(), timeout).unwrap();
+    /// # use std::error::Error;
+    /// # fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    /// let timeout = Duration::from_secs(1);
+    /// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
+    /// #     .connect(&DeviceConfig::sample(), timeout)?;
     /// # handle.request_events();
-    /// # let mode = handle.receive_mode(timeout).unwrap();
-    /// let mut buf = Buffer::new(&mode);
+    /// # let mode = handle.receive_mode(timeout)?;
+    /// let buf_id = handle.new_buffer(&mode);
     ///
-    /// assert!(buf.version.is_none());
+    /// assert!(handle.get_buffer(buf_id).expect("Buffer exists").version.is_none());
     ///
-    /// handle.request_update(&mut buf, timeout).unwrap();
-    /// let after_first = buf.version;
+    /// handle.request_update(buf_id, timeout)?;
+    /// let after_first = handle
+    ///     .get_buffer(buf_id).expect("buffer exists")
+    ///     .version.expect("Buffer must have been updated");
     ///
-    /// handle.request_update(&mut buf, timeout).unwrap();
-    /// let after_second = buf.version;
+    /// handle.request_update(buf_id, timeout)?;
+    /// let after_second = handle
+    ///     .get_buffer(buf_id).expect("buffer exists")
+    ///     .version.expect("Buffer must have been updated");
     ///
-    /// assert!(after_second.unwrap() > after_first.unwrap());
+    /// assert!(after_second > after_first);
+    /// # Ok(())
+    /// # }
     /// ```
     pub version: Option<u32>,
     pub(crate) id: BufferId,
-    attached_to: Option<evdi_handle>,
     update_ready: Receiver<()>,
     send_update_ready: Sender<()>,
     buffer: Box<[u8]>,
@@ -78,44 +85,6 @@ const MAX_RECTS_BUFFER_LEN: usize = 16;
 const BGRA_DEPTH: usize = 4;
 
 impl Buffer {
-    /// Allocate a buffer to store the screen of a device with a specific mode.
-    pub fn new(mode: &Mode) -> Self {
-        let width = mode.width as usize;
-        let height = mode.height as usize;
-        let bits_per_pixel = mode.bits_per_pixel as usize;
-        let stride = bits_per_pixel / 8 * width;
-
-        // NOTE: We use a boxed slice to prevent accidental re-allocation
-        let buffer = vec![0u8; height * stride].into_boxed_slice();
-        let rects = vec![
-            evdi_rect {
-                x1: 0,
-                y1: 0,
-                x2: 0,
-                y2: 0,
-            };
-            MAX_RECTS_BUFFER_LEN
-        ]
-        .into_boxed_slice();
-
-        let (send_update_ready, update_ready) = channel();
-
-        Buffer {
-            version: None,
-            id: BufferId::generate(),
-            attached_to: None,
-            update_ready,
-            send_update_ready,
-            buffer,
-            rects,
-            num_rects: -1,
-            width,
-            height,
-            stride,
-            pixel_format: mode.pixel_format.clone(),
-        }
-    }
-
     /// Get a reference to the underlying bytes of this buffer.
     ///
     /// Use [`Buffer::width`], [`Buffer::height`], [`Buffer::stride`], and [`Buffer::pixel_format`]
@@ -167,23 +136,6 @@ impl Buffer {
         Ok(())
     }
 
-    /// Returns true if we weren't previously attached
-    pub(crate) fn ensure_attached_to(
-        &mut self,
-        handle: evdi_handle,
-    ) -> Result<bool, BufferAttachmentError> {
-        if let Some(attached_to) = self.attached_to {
-            if attached_to == handle {
-                Ok(false)
-            } else {
-                Err(BufferAttachmentError::AlreadyToOther)
-            }
-        } else {
-            self.attached_to = Some(handle);
-            Ok(true)
-        }
-    }
-
     pub(crate) fn update_ready_sender(&self) -> Sender<()> {
         self.send_update_ready.clone()
     }
@@ -222,20 +174,43 @@ impl Buffer {
             Some(0)
         }
     }
-}
 
-impl Drop for Buffer {
-    fn drop(&mut self) {
-        if let Some(handle) = self.attached_to.as_ref() {
-            // NOTE: We don't unregister the channel from the handle because of the onerous changes
-            // it would require us to make to our api surface.
-            unsafe { evdi_unregister_buffer(*handle, self.id.0) };
+    /// Allocate a buffer to store the screen of a device with a specific mode.
+    pub(crate) fn new(mode: &Mode) -> Self {
+        let width = mode.width as usize;
+        let height = mode.height as usize;
+        let bits_per_pixel = mode.bits_per_pixel as usize;
+        let stride = bits_per_pixel / 8 * width;
+
+        // NOTE: We use a boxed slice to prevent accidental re-allocation
+        let buffer = vec![0u8; height * stride].into_boxed_slice();
+        let rects = vec![
+            evdi_rect {
+                x1: 0,
+                y1: 0,
+                x2: 0,
+                y2: 0,
+            };
+            MAX_RECTS_BUFFER_LEN
+        ]
+        .into_boxed_slice();
+
+        let (send_update_ready, update_ready) = channel();
+
+        Buffer {
+            version: None,
+            id: BufferId::generate(),
+            update_ready,
+            send_update_ready,
+            buffer,
+            rects,
+            num_rects: -1,
+            width,
+            height,
+            stride,
+            pixel_format: mode.pixel_format,
         }
     }
-}
-
-pub(crate) enum BufferAttachmentError {
-    AlreadyToOther,
 }
 
 #[cfg(test)]
@@ -257,17 +232,17 @@ pub mod tests {
 
     #[test]
     fn can_create_buffer() {
-        let handle = handle_fixture();
+        let mut handle = handle_fixture();
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
-        Buffer::new(&mode);
+        handle.new_buffer(&mode);
     }
 
     #[test]
     fn can_access_buffer_sys() {
-        let handle = handle_fixture();
+        let mut handle = handle_fixture();
         handle.request_events();
         let mode = handle.receive_mode(TIMEOUT).unwrap();
-        Buffer::new(&mode).sys();
+        handle.new_buffer(&mode).sys();
     }
 }
