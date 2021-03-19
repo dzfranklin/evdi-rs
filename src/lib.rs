@@ -32,7 +32,7 @@
 //! let mut handle = unconnected_handle.connect(&device_config, READY_TIMEOUT)?;
 //!
 //! // For simplicity don't handle mode changed events in this example
-//! handle.request_events();
+//! handle.dispatch_events();
 //! let mode = handle.events.mode.recv_timeout(RECEIVE_INITIAL_MODE_TIMEOUT)?;
 //!
 //! // For simplicity, we only use one buffer. You may want to use more than one buffer so that you

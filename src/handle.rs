@@ -124,7 +124,7 @@ impl Handle {
     /// # let timeout = Duration::from_secs(1);
     /// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
     /// #     .connect(&DeviceConfig::sample(), timeout)?;
-    /// # handle.request_events();
+    /// # handle.dispatch_events();
     /// # let mode = handle.events.mode.recv_timeout(timeout)?;
     /// #
     /// let buffer_id: BufferId = handle.new_buffer(&mode);
@@ -167,12 +167,15 @@ impl Handle {
     /// # let timeout = Duration::from_secs(1);
     /// # let mut handle = DeviceNode::get().unwrap().open().unwrap()
     /// #     .connect(&DeviceConfig::sample(), timeout).unwrap();
-    /// # handle.request_events();
+    /// # handle.dispatch_events();
     /// # let mode = handle.events.mode.recv_timeout(timeout).unwrap();
     /// let buf_id = handle.new_buffer(&mode);
     /// handle.request_update(buf_id, timeout).unwrap();
     /// let buf_data = handle.get_buffer(buf_id).unwrap();
     /// ```
+    ///
+    /// Note: [`Handle::request_update`] happens to be implemented in such a way that it causes
+    /// events available at the time it is called to be dispatched. Users should not rely on this.
     pub fn request_update(
         &mut self,
         buffer_id: BufferId,
@@ -193,7 +196,7 @@ impl Handle {
 
         let ready = unsafe { evdi_request_update(handle_sys, buffer_id.sys()) };
         if !ready {
-            Self::request_events_sys(user_data_sys, handle_sys);
+            Self::dispatch_events_sys(user_data_sys, handle_sys);
             buffer.block_until_update_ready(timeout)?;
         }
 
@@ -216,16 +219,17 @@ impl Handle {
         }
     }
 
-    /// Ask the kernel module to send us some events.
+    /// Dispatch events received from the kernel module to the channels in [`Handle::events`].
     ///
-    /// I think this blocks, dispatches a certain number of events, and the then returns, so callers
-    /// should call in a loop. However, the docs aren't clear.
-    /// See <https://github.com/DisplayLink/evdi/issues/265>
-    pub fn request_events(&self) {
-        Self::request_events_sys(self as *const Handle, self.sys);
+    /// If you want to receive events in [`Handle::events`] you must call this in some sort of loop.
+    ///
+    /// Note: [`Handle::request_update`] happens to be implemented in such a way that it causes
+    /// events available at the time it is called to be dispatched. Users should not rely on this.
+    pub fn dispatch_events(&self) {
+        Self::dispatch_events_sys(self as *const Handle, self.sys);
     }
 
-    fn request_events_sys(user_data: *const Handle, handle: evdi_handle) {
+    fn dispatch_events_sys(user_data: *const Handle, handle: evdi_handle) {
         let mut ctx = evdi_event_context {
             dpms_handler: None,
             mode_changed_handler: Some(Self::mode_changed_handler_caller),
@@ -373,7 +377,7 @@ mod tests {
     #[test]
     fn can_receive_mode() {
         let handle = handle_fixture();
-        handle.request_events();
+        handle.dispatch_events();
         let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
         assert!(mode.height > 100);
     }
@@ -382,7 +386,7 @@ mod tests {
     fn update_can_be_called_multiple_times() {
         let mut handle = handle_fixture();
 
-        handle.request_events();
+        handle.dispatch_events();
         let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
 
         let buf_id = handle.new_buffer(&mode);
@@ -393,7 +397,7 @@ mod tests {
     }
 
     fn get_update(handle: &mut Handle) -> &Buffer {
-        handle.request_events();
+        handle.dispatch_events();
         let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
         let buf_id = handle.new_buffer(&mode);
 
@@ -451,7 +455,7 @@ mod tests {
     #[test]
     fn cannot_get_buffer_after_unregister() {
         let mut handle = handle_fixture();
-        handle.request_events();
+        handle.dispatch_events();
         let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
 
         let buf = handle.new_buffer(&mode);

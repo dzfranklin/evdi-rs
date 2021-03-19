@@ -45,7 +45,7 @@ pub struct Buffer {
     /// let timeout = Duration::from_secs(1);
     /// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
     /// #     .connect(&DeviceConfig::sample(), timeout)?;
-    /// # handle.request_events();
+    /// # handle.dispatch_events();
     /// # let mode = handle.events.mode.recv_timeout(timeout)?;
     /// let buf_id = handle.new_buffer(&mode);
     ///
@@ -233,7 +233,7 @@ pub mod tests {
     #[test]
     fn can_create_buffer() {
         let mut handle = handle_fixture();
-        handle.request_events();
+        handle.dispatch_events();
         let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
         handle.new_buffer(&mode);
     }
@@ -241,7 +241,7 @@ pub mod tests {
     #[test]
     fn can_access_buffer_sys() {
         let mut handle = handle_fixture();
-        handle.request_events();
+        handle.dispatch_events();
         let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
         handle.new_buffer(&mode).sys();
     }
