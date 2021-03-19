@@ -84,6 +84,27 @@ const MAX_RECTS_BUFFER_LEN: usize = 16;
 
 const BGRA_DEPTH: usize = 4;
 
+/// Owned and created by [`Handle`]s. The general flow is
+///
+/// ```
+/// # use evdi::prelude::*;
+/// # use std::time::Duration;
+/// # use std::error::Error;
+/// # fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+/// # let timeout = Duration::from_secs(1);
+/// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
+/// #     .connect(&DeviceConfig::sample(), timeout)?;
+/// # handle.dispatch_events();
+/// # let mode = handle.events.mode.recv_timeout(timeout)?;
+/// #
+/// let buffer_id: BufferId = handle.new_buffer(&mode);
+/// let buffer_data: &Buffer = handle.get_buffer(buffer_id).expect("Buffer exists");
+///
+/// handle.unregister_buffer(buffer_id);
+/// assert!(handle.get_buffer(buffer_id).is_none());
+/// # Ok(())
+/// # }
+/// ```
 impl Buffer {
     /// Get a reference to the underlying bytes of this buffer.
     ///

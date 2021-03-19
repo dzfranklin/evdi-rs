@@ -115,25 +115,6 @@ impl Handle {
     /// Allocate and register a buffer to store the screen of a device with a specific mode.
     ///
     /// You are responsible for re-creating buffers if the mode changes.
-    ///
-    /// ```
-    /// # use evdi::prelude::*;
-    /// # use std::time::Duration;
-    /// # use std::error::Error;
-    /// # fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    /// # let timeout = Duration::from_secs(1);
-    /// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
-    /// #     .connect(&DeviceConfig::sample(), timeout)?;
-    /// # handle.dispatch_events();
-    /// # let mode = handle.events.mode.recv_timeout(timeout)?;
-    /// #
-    /// let buffer_id: BufferId = handle.new_buffer(&mode);
-    /// let buffer_data: &Buffer = handle.get_buffer(buffer_id).expect("Buffer exists");
-    ///
-    /// handle.unregister_buffer(buffer_id);
-    /// assert!(handle.get_buffer(buffer_id).is_none());
-    /// # Ok(())
-    /// # }
     pub fn new_buffer(&mut self, mode: &Mode) -> BufferId {
         let buffer = Buffer::new(mode);
         let id = buffer.id;
@@ -143,8 +124,6 @@ impl Handle {
     }
 
     /// De-allocate and unregister a buffer.
-    ///
-    /// After calling this, [`Handle::get_buffer(id)`] will return `None`.
     pub fn unregister_buffer(&mut self, id: BufferId) {
         let removed = self.buffers.remove(&id);
         if removed.is_some() {
@@ -152,7 +131,7 @@ impl Handle {
         }
     }
 
-    /// Get buffer data, if the [`BufferId`] provided is associated with this handle.
+    /// Get buffer data if the [`BufferId`] provided is associated with this handle.
     pub fn get_buffer(&self, id: BufferId) -> Option<&Buffer> {
         self.buffers.get(&id)
     }
@@ -170,8 +149,8 @@ impl Handle {
     /// # handle.dispatch_events();
     /// # let mode = handle.events.mode.recv_timeout(timeout).unwrap();
     /// let buf_id = handle.new_buffer(&mode);
-    /// handle.request_update(buf_id, timeout).unwrap();
-    /// let buf_data = handle.get_buffer(buf_id).unwrap();
+    /// handle.request_update(buf_id, timeout).expect("Update available within timeout");
+    /// let buf_data = handle.get_buffer(buf_id).expect("Buffer exists");
     /// ```
     ///
     /// Note: [`Handle::request_update`] happens to be implemented in such a way that it causes
