@@ -1,9 +1,9 @@
 //! Performs most operations
 
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use std::collections::HashMap;
 use std::mem::forget;
 use std::os::raw::{c_int, c_uint, c_void};
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
 use evdi_sys::*;
@@ -91,8 +91,24 @@ pub struct Handle {
     sys: evdi_handle,
     device_config: DeviceConfig,
     buffers: HashMap<BufferId, Buffer>,
-    mode: Receiver<Mode>,
-    mode_sender: Sender<Mode>,
+    /// Holds [`::crossbeam_channel::Receiver`]s for events.
+    ///
+    /// ```
+    /// # use evdi::prelude::*;
+    /// # use std::time::Duration;
+    /// # use crossbeam_channel::{RecvTimeoutError, TryRecvError};
+    /// # let device: DeviceNode = DeviceNode::get().unwrap();
+    /// # let timeout = Duration::from_secs(1);
+    /// # let mut handle = device.open().unwrap()
+    /// #   .connect(&DeviceConfig::sample(), timeout).unwrap();
+    /// #
+    /// // Block until we get a mode or timeout
+    /// let mode: Result<Mode, RecvTimeoutError> = handle.events.mode.recv_timeout(timeout);
+    ///
+    /// // Check if a mode is available
+    /// let mode: Result<Mode, TryRecvError> = handle.events.mode.try_recv();
+    /// ```
+    pub events: HandleEvents,
 }
 
 impl Handle {
@@ -109,11 +125,10 @@ impl Handle {
     /// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
     /// #     .connect(&DeviceConfig::sample(), timeout)?;
     /// # handle.request_events();
-    /// # let mode = handle.receive_mode(timeout)?;
+    /// # let mode = handle.events.mode.recv_timeout(timeout)?;
     /// #
-    /// let buffer_id = handle.new_buffer(&mode);
-    /// let buffer_data = handle.get_buffer(buffer_id).expect("Buffer exists");
-    /// assert_eq!(buffer_data.width, mode.width as usize);
+    /// let buffer_id: BufferId = handle.new_buffer(&mode);
+    /// let buffer_data: &Buffer = handle.get_buffer(buffer_id).expect("Buffer exists");
     ///
     /// handle.unregister_buffer(buffer_id);
     /// assert!(handle.get_buffer(buffer_id).is_none());
@@ -153,7 +168,7 @@ impl Handle {
     /// # let mut handle = DeviceNode::get().unwrap().open().unwrap()
     /// #     .connect(&DeviceConfig::sample(), timeout).unwrap();
     /// # handle.request_events();
-    /// # let mode = handle.receive_mode(timeout).unwrap();
+    /// # let mode = handle.events.mode.recv_timeout(timeout).unwrap();
     /// let buf_id = handle.new_buffer(&mode);
     /// handle.request_update(buf_id, timeout).unwrap();
     /// let buf_data = handle.get_buffer(buf_id).unwrap();
@@ -225,44 +240,6 @@ impl Handle {
         unsafe { evdi_handle_events(handle, &mut ctx) };
     }
 
-    /// Blocks until a mode event is received.
-    ///
-    /// A mode event will not be received unless [`Self::request_events`] is called.
-    ///
-    /// ```
-    /// # use evdi::prelude::*;
-    /// # use std::time::Duration;
-    /// # let device: DeviceNode = DeviceNode::get().unwrap();
-    /// # let timeout = Duration::from_secs(1);
-    /// # let mut handle = device.open().unwrap()
-    /// #   .connect(&DeviceConfig::sample(), timeout).unwrap();
-    /// handle.request_events();
-    /// let mode = handle.receive_mode(timeout).unwrap();
-    /// ```
-    pub fn receive_mode(&self, timeout: Duration) -> Result<Mode, RecvTimeoutError> {
-        self.mode.recv_timeout(timeout)
-    }
-
-    /// Returns a mode event if one is currently available without blocking.
-    ///
-    /// A mode event will not be received unless [`Self::request_events`] has been called.
-    ///
-    /// ```
-    /// # use evdi::prelude::*;
-    /// # use std::time::Duration;
-    /// # let device: DeviceNode = DeviceNode::get().unwrap();
-    /// # let timeout = Duration::from_secs(1);
-    /// # let mut handle = device.open().unwrap()
-    /// #   .connect(&DeviceConfig::sample(), timeout).unwrap();
-    /// handle.request_events();
-    /// if let Some(mode) = handle.try_receive_mode() {
-    ///     // use the mode
-    /// }
-    /// ```
-    pub fn try_receive_mode(&self) -> Option<Mode> {
-        self.mode.try_recv().ok()
-    }
-
     /// Disconnect the handle.
     ///
     /// A handle is automatically disconnected and closed on drop, you only need this if you want
@@ -281,7 +258,7 @@ impl Handle {
 
     extern "C" fn mode_changed_handler_caller(mode: evdi_mode, user_data: *mut c_void) {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
-        if let Err(err) = handle.mode_sender.send(mode.into()) {
+        if let Err(err) = handle.events.mode_sender.send(mode.into()) {
             eprintln!(
                 "Dropping msg. Mode change receiver closed, but callback called: {:?}",
                 err
@@ -317,14 +294,11 @@ impl Handle {
 
     /// Takes a handle that has just been connected and polled until ready.
     fn new(handle_sys: evdi_handle, device_config: DeviceConfig) -> Self {
-        let (mode_sender, mode) = channel();
-
         Self {
             sys: handle_sys,
             device_config,
             buffers: HashMap::new(),
-            mode,
-            mode_sender,
+            events: HandleEvents::default(),
         }
     }
 }
@@ -345,6 +319,20 @@ impl PartialEq for Handle {
 }
 
 impl Eq for Handle {}
+
+#[derive(Debug)]
+pub struct HandleEvents {
+    pub mode: Receiver<Mode>,
+    mode_sender: Sender<Mode>,
+}
+
+impl Default for HandleEvents {
+    fn default() -> Self {
+        let (mode_sender, mode) = bounded(1);
+
+        Self { mode, mode_sender }
+    }
+}
 
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum RequestUpdateError {
@@ -386,7 +374,7 @@ mod tests {
     fn can_receive_mode() {
         let handle = handle_fixture();
         handle.request_events();
-        let mode = handle.receive_mode(TIMEOUT).unwrap();
+        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
         assert!(mode.height > 100);
     }
 
@@ -395,7 +383,7 @@ mod tests {
         let mut handle = handle_fixture();
 
         handle.request_events();
-        let mode = handle.receive_mode(TIMEOUT).unwrap();
+        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
 
         let buf_id = handle.new_buffer(&mode);
 
@@ -406,7 +394,7 @@ mod tests {
 
     fn get_update(handle: &mut Handle) -> &Buffer {
         handle.request_events();
-        let mode = handle.receive_mode(TIMEOUT).unwrap();
+        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
         let buf_id = handle.new_buffer(&mode);
 
         // Give us some time to settle
@@ -461,16 +449,10 @@ mod tests {
     }
 
     #[test]
-    fn try_receive_returns_none_initially() {
-        let handle = handle_fixture();
-        assert!(handle.try_receive_mode().is_none());
-    }
-
-    #[test]
     fn cannot_get_buffer_after_unregister() {
         let mut handle = handle_fixture();
         handle.request_events();
-        let mode = handle.receive_mode(TIMEOUT).unwrap();
+        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
 
         let buf = handle.new_buffer(&mode);
         handle.unregister_buffer(buf);

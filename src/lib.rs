@@ -33,7 +33,7 @@
 //!
 //! // For simplicity don't handle mode changed events in this example
 //! handle.request_events();
-//! let mode = handle.receive_mode(RECEIVE_INITIAL_MODE_TIMEOUT)?;
+//! let mode = handle.events.mode.recv_timeout(RECEIVE_INITIAL_MODE_TIMEOUT)?;
 //!
 //! // For simplicity, we only use one buffer. You may want to use more than one buffer so that you
 //! // can send the contents of one buffer while updating another.

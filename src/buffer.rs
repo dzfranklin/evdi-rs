@@ -1,10 +1,10 @@
 //! Buffer to receive virtual screen pixels
 
+use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 use std::fs::File;
 use std::io;
 use std::io::Write;
 use std::os::raw::{c_int, c_void};
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
 use drm_fourcc::UnrecognizedFourcc;
@@ -46,7 +46,7 @@ pub struct Buffer {
     /// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
     /// #     .connect(&DeviceConfig::sample(), timeout)?;
     /// # handle.request_events();
-    /// # let mode = handle.receive_mode(timeout)?;
+    /// # let mode = handle.events.mode.recv_timeout(timeout)?;
     /// let buf_id = handle.new_buffer(&mode);
     ///
     /// assert!(handle.get_buffer(buf_id).expect("Buffer exists").version.is_none());
@@ -195,7 +195,7 @@ impl Buffer {
         ]
         .into_boxed_slice();
 
-        let (send_update_ready, update_ready) = channel();
+        let (send_update_ready, update_ready) = unbounded();
 
         Buffer {
             version: None,
@@ -234,7 +234,7 @@ pub mod tests {
     fn can_create_buffer() {
         let mut handle = handle_fixture();
         handle.request_events();
-        let mode = handle.receive_mode(TIMEOUT).unwrap();
+        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
         handle.new_buffer(&mode);
     }
 
@@ -242,7 +242,7 @@ pub mod tests {
     fn can_access_buffer_sys() {
         let mut handle = handle_fixture();
         handle.request_events();
-        let mode = handle.receive_mode(TIMEOUT).unwrap();
+        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
         handle.new_buffer(&mode).sys();
     }
 }
