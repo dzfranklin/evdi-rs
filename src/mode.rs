@@ -7,8 +7,8 @@ use evdi_sys::evdi_mode;
 pub struct Mode {
     pub width: u32,
     pub height: u32,
-    /// Max updates per second. ([`Handle::request_update`] will automatically block if you request
-    /// updates faster than this).
+    /// Max updates per second. You shouldn't call [`crate::handle::Handle::request_update`] faster
+    /// than this.
     pub refresh_rate: u32,
     pub bits_per_pixel: u32,
     pub pixel_format: Result<DrmFormat, UnrecognizedFourcc>,
