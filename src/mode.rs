@@ -7,8 +7,7 @@ use evdi_sys::evdi_mode;
 pub struct Mode {
     pub width: u32,
     pub height: u32,
-    /// Max updates per second. You shouldn't call [`crate::handle::Handle::request_update`] faster
-    /// than this.
+    /// Max updates per second.
     pub refresh_rate: u32,
     pub bits_per_pixel: u32,
     pub pixel_format: Result<DrmFormat, UnrecognizedFourcc>,
@@ -29,10 +28,10 @@ impl From<evdi_mode> for Mode {
 #[cfg(test)]
 mod tests {
     use crate::fii::evdi_mode;
-    use crate::prelude::*;
+    use crate::test_common::*;
     use drm_fourcc::DrmFormat;
 
-    #[test]
+    #[ltest]
     fn from_sample() {
         let expected = Mode {
             width: 1280,

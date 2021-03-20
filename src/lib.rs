@@ -4,9 +4,15 @@
 //! High-level bindings to [evdi](https://github.com/DisplayLink/evdi), a library for managing
 //! virtual displays on linux.
 //!
+//! ## Tracing and logging
+//! This library emits many [tracing](https://tracing.rs) events. You need to call [`setup_logs`] if
+//! you want to receive logs from the wrapped library instead of having them written to stdout.
+//!
+//! ## Not thread safe
 //! Evdi is not thread safe, and you cannot block the thread it runs on or your virtual and real
 //! misbehave.
 //!
+//! ## Alpha quality
 //! This library is alpha quality. If your display starts behaving weirdly, rebooting may help.
 //!
 //! The underlying library this wraps handles errors loosly. Many errors are handled by logging
@@ -21,7 +27,6 @@
 //! # use evdi::prelude::*;
 //! #
 //! const READY_TIMEOUT: Duration = Duration::from_secs(1);
-//! const RECEIVE_INITIAL_MODE_TIMEOUT: Duration = Duration::from_secs(1);
 //! const UPDATE_BUFFER_TIMEOUT: Duration = Duration::from_millis(100);
 //!
 //! # tokio_test::block_on(async {
@@ -36,7 +41,7 @@
 //!
 //! // For simplicity don't handle the mode changing after we start
 //! handle.dispatch_events();
-//! handle.events.mode.changed().await;
+//! handle.events.mode.changed().await.unwrap();
 //! let mode = handle.events.mode.borrow()
 //!     .expect("Mode will only be none before the first mode is received.");
 //!
@@ -89,6 +94,9 @@ pub use evdi_sys as fii;
 use evdi_sys::*;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::ptr::null_mut;
+use std::sync::Once;
+use tracing::{info, instrument};
 
 pub mod buffer;
 pub mod device_config;
@@ -96,6 +104,9 @@ pub mod device_node;
 pub mod handle;
 pub mod mode;
 pub mod prelude;
+
+#[cfg(test)]
+mod test_common;
 
 /// Check the status of the evdi kernel module for compatibility with this library version.
 ///
@@ -113,6 +124,7 @@ pub mod prelude;
 ///     }
 /// }
 /// ```
+#[tracing::instrument]
 pub fn check_kernel_mod() -> KernelModStatus {
     let mod_version = KernelModVersion::get();
     if let Some(mod_version) = mod_version {
@@ -134,30 +146,34 @@ pub enum KernelModStatus {
     Compatible,
 }
 
-/// Set the callback to receive log messages, instead of having them written to stdout.
+static LOGS_SETUP: Once = Once::new();
+
+/// Configure the wrapped library to output log records instead of outputting to stdout.
 ///
-/// The callback is global.
+/// If a [tracing collector](https://tracing.rs) is setup logs will be sent there, otherwise
+/// [log records](https://docs.rs/log/0.4.6/log/) will be emitted.
 ///
-/// ```
-/// # use evdi::prelude::*;
-/// set_logging(|msg| println!("{}", msg));
-/// ```
-pub fn set_logging<F>(cb: F)
-where
-    F: Fn(String),
-{
-    unsafe {
+/// The wrapped library doesn't distinguish different types of logs, so both information and error
+/// messages will be logged as `info`.
+///
+/// Calling this function multiple times has no effect.
+pub fn ensure_logs_setup() {
+    LOGS_SETUP.call_once(|| unsafe {
         wrapper_evdi_set_logging(wrapper_log_cb {
-            function: Some(logging_cb_caller::<F>),
-            user_data: Box::into_raw(Box::new(cb)) as *mut c_void,
+            function: Some(logging_cb_caller),
+            user_data: null_mut(),
         });
-    }
+    });
 }
 
-extern "C" fn logging_cb_caller<F: Fn(String)>(user_data: *mut c_void, msg: *const c_char) {
+extern "C" fn logging_cb_caller(_user_data: *mut c_void, msg: *const c_char) {
     let msg = unsafe { CStr::from_ptr(msg) }.to_str().unwrap().to_owned();
-    let cb = unsafe { (user_data as *mut F).as_ref().unwrap() };
-    cb(msg);
+    info!(
+        libevdi_unknown_level = true,
+        wraps = msg.as_str(),
+        "libevdi: {}",
+        msg
+    );
 }
 
 const MOD_VERSION_FILE: &str = "/sys/devices/evdi/version";
@@ -170,6 +186,7 @@ pub struct KernelModVersion {
 }
 
 impl KernelModVersion {
+    #[instrument]
     pub fn get() -> Option<Self> {
         lazy_static! {
             static ref RE: Regex =
@@ -206,6 +223,7 @@ impl LibVersion {
     /// Get the version of the evdi library linked against (not the kernel module).
     ///
     /// Uses semver. See <https://displaylink.github.io/evdi/details/#versioning>
+    #[instrument]
     pub fn get() -> Self {
         let sys = unsafe {
             let mut out = evdi_lib_version {
@@ -249,36 +267,47 @@ impl LibVersion {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::channel;
-
     use crate::prelude::*;
     use crate::*;
+    use logtest::Record;
+    use test_env_log::test as ltest;
+    use tracing::log::Level;
 
     #[test]
-    fn cb_to_set_logging_receives_multiple_msgs() {
-        let (send, recv) = channel();
+    fn logs_correctly() {
+        use logtest::Logger;
+        let logger = Logger::start();
 
-        set_logging(move |msg| send.send(msg).unwrap());
+        ensure_logs_setup();
 
-        DeviceNode::get().unwrap().open().unwrap(); // Generate a log msg
-        recv.recv().unwrap(); // Block until we receive the msg
+        DeviceNode::get().unwrap().open().unwrap(); // Generate some log msgs
 
-        DeviceNode::get().unwrap().open().unwrap(); // Generate a log msg
-        recv.recv().unwrap(); // Block until we receive the msg
+        let records: Vec<Record> = logger
+            .into_iter()
+            .filter(|r| r.args().starts_with("libevdi"))
+            .collect();
+
+        assert!(records.len() > 2);
+
+        for record in records {
+            assert_eq!(record.level(), Level::Info);
+            assert!(record.args().contains(" libevdi_unknown_level=true "));
+            assert!(record.args().contains(" wraps="));
+        }
     }
 
-    #[test]
+    #[ltest]
     fn get_lib_version_works() {
         LibVersion::get();
     }
 
-    #[test]
+    #[ltest]
     fn get_mod_version_works() {
         let result = KernelModVersion::get();
         assert!(result.is_some())
     }
 
-    #[test]
+    #[ltest]
     fn is_compatible_with_works() {
         let mod_version = KernelModVersion::get().unwrap();
         let lib_version = LibVersion::get();

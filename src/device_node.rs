@@ -9,6 +9,7 @@ use evdi_sys::*;
 use lazy_static::lazy_static;
 use regex::Regex;
 use thiserror::Error;
+use tracing::instrument;
 
 use crate::prelude::*;
 
@@ -25,6 +26,7 @@ impl DeviceNode {
     /// Returns an evdi device node if one is available.
     ///
     /// If no device is available you will need to run Device::add() with superuser permissions.
+    #[instrument]
     pub fn get() -> Option<Self> {
         if let Ok(mut devices) = Self::list_available() {
             devices.pop()
@@ -34,6 +36,7 @@ impl DeviceNode {
     }
 
     /// Check if a device node is an evdi device node, is a different device node, or doesn't exist.
+    #[instrument]
     pub fn status(&self) -> DeviceNodeStatus {
         let sys = unsafe { evdi_check_device(self.id) };
         DeviceNodeStatus::from(sys)
@@ -43,6 +46,7 @@ impl DeviceNode {
     ///
     /// Returns None if we fail to open the device, which may be because the device isn't an evdi
     /// device node.
+    #[instrument]
     pub fn open(&self) -> Result<UnconnectedHandle, OpenDeviceError> {
         // NOTE: Opening invalid devices can be very slow (~10sec on my laptop), so we check first
         match self.status() {
@@ -60,6 +64,7 @@ impl DeviceNode {
     }
 
     /// List all evdi device nodes that have available status in a stable order
+    #[instrument]
     pub fn list_available() -> io::Result<Vec<Self>> {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"^card([0-9]+)$").unwrap();
@@ -93,6 +98,7 @@ impl DeviceNode {
     /// Tell the kernel module to create a new evdi device node.
     ///
     /// **Requires superuser permissions.**
+    #[instrument]
     pub fn add() -> bool {
         let status = unsafe { evdi_add_device() };
         status > 0
@@ -101,6 +107,7 @@ impl DeviceNode {
     /// Remove all evdi device nodes.
     ///
     /// **Requires superuser permissions.**
+    #[instrument]
     pub fn remove_all() -> io::Result<()> {
         let mut f = File::with_options().write(true).open(REMOVE_ALL_FILE)?;
         f.write_all("1".as_ref())?;
@@ -163,50 +170,51 @@ impl DeviceNodeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_common::*;
 
-    #[test]
+    #[ltest]
     fn default_device_is_not_evdi() {
         let status = DeviceNode::new(0).status();
         assert_eq!(status, DeviceNodeStatus::Unrecognized);
     }
 
-    #[test]
+    #[ltest]
     fn nonexistent_device_has_proper_status() {
         let status = DeviceNode::new(4200).status();
         assert_eq!(status, DeviceNodeStatus::NotPresent);
     }
 
-    #[test]
+    #[ltest]
     fn add_fails_without_superuser() {
         let result = DeviceNode::add();
         assert_eq!(result, false);
     }
 
-    #[test]
+    #[ltest]
     fn remove_all_fails_without_superuser() {
         let result = DeviceNode::remove_all();
         assert!(result.is_err())
     }
 
-    #[test]
+    #[ltest]
     fn list_available_contains_at_least_one_device() {
         let results = DeviceNode::list_available().unwrap();
         assert!(!results.is_empty(), "No available devices. Have you added at least one device by running the binary add_device at least once?");
     }
 
-    #[test]
+    #[ltest]
     fn get_returns_a_device() {
         let result = DeviceNode::get();
         assert!(result.is_some());
     }
 
-    #[test]
+    #[ltest]
     fn can_open() {
         let device = DeviceNode::get().unwrap();
         device.open().unwrap();
     }
 
-    #[test]
+    #[ltest]
     fn opening_nonexistent_device_fails() {
         let device = DeviceNode::new(4200);
         match device.open() {
@@ -215,7 +223,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[ltest]
     fn opening_non_evdi_device_fails() {
         let device = DeviceNode::new(0);
         match device.open() {

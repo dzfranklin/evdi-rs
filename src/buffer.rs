@@ -227,9 +227,9 @@ impl Buffer {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::handle::tests::handle_fixture;
+    use crate::test_common::*;
 
-    #[tokio::test]
+    #[ltest(atest)]
     async fn can_create_buffer() {
         let mut handle = handle_fixture().await;
         handle.dispatch_events();
@@ -238,7 +238,7 @@ pub mod tests {
         handle.new_buffer(&mode);
     }
 
-    #[tokio::test]
+    #[ltest(atest)]
     async fn can_access_buffer_sys() {
         let mut handle = handle_fixture().await;
         handle.dispatch_events();

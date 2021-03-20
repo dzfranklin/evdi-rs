@@ -10,6 +10,7 @@ use thiserror::Error;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::watch;
 use tokio::time;
+use tracing::{error, instrument, span, Level};
 
 use crate::prelude::*;
 
@@ -35,6 +36,7 @@ impl UnconnectedHandle {
     /// # Ok::<(), PollReadyError>(())
     /// # });
     /// ```
+    #[instrument]
     pub async fn connect(
         self,
         config: &DeviceConfig,
@@ -44,13 +46,18 @@ impl UnconnectedHandle {
 
         let config: DeviceConfig = config.to_owned();
         let edid = Box::leak(Box::new(config.edid()));
-        unsafe {
-            evdi_connect(
-                self.handle,
-                edid.as_ptr(),
-                edid.len() as c_uint,
-                config.sku_area_limit(),
-            );
+
+        {
+            let span = span!(Level::TRACE, "evdi_connect", handle = ?self.handle);
+            let _enter = span.enter();
+            unsafe {
+                evdi_connect(
+                    self.handle,
+                    edid.as_ptr(),
+                    edid.len() as c_uint,
+                    config.sku_area_limit(),
+                );
+            }
         }
 
         let sys = self.handle;
@@ -61,19 +68,35 @@ impl UnconnectedHandle {
 
         let handle = Handle::new(sys, config);
 
-        let raw_fd = unsafe { evdi_get_event_ready(handle.sys) };
+        let raw_fd = {
+            let span = span!(
+                Level::TRACE,
+                "evdi_get_event_ready",
+                handle = handle.sys as usize,
+            );
+            let _enter = span.enter();
+            unsafe { evdi_get_event_ready(handle.sys) }
+        };
+
         let fd = AsyncFd::new(raw_fd)?;
 
-        tokio::select! {
-            guard = fd.readable() => {
-                guard?.retain_ready()
-            },
-            _ = tokio::time::sleep(ready_timeout) => {
-                return Err(PollReadyError::Timeout)
-            },
-        }
+        Self::await_fd_readable(fd, ready_timeout).await?;
 
         Ok(handle)
+    }
+
+    #[instrument]
+    async fn await_fd_readable(fd: AsyncFd<i32>, timeout: Duration) -> Result<(), PollReadyError> {
+        tokio::select! {
+            guard = fd.readable() => {
+                guard?.retain_ready();
+                Ok(())
+            },
+            _ = tokio::time::sleep(timeout) => {
+                error!(?fd, ?timeout, "await_fd_readable_timeout");
+                Err(PollReadyError::Timeout)
+            },
+        }
     }
 
     pub(crate) fn new(handle: evdi_handle) -> Self {
@@ -134,6 +157,7 @@ impl Handle {
     /// Allocate and register a buffer to store the screen of a device with a specific mode.
     ///
     /// You are responsible for re-creating buffers if the mode changes.
+    #[instrument]
     pub fn new_buffer(&mut self, mode: &Mode) -> BufferId {
         let buffer = Buffer::new(mode);
         let id = buffer.id;
@@ -143,6 +167,7 @@ impl Handle {
     }
 
     /// De-allocate and unregister a buffer.
+    #[instrument]
     pub fn unregister_buffer(&mut self, id: BufferId) {
         let removed = self.buffers.remove(&id);
         if removed.is_some() {
@@ -179,6 +204,7 @@ impl Handle {
     ///
     /// Note: [`Handle::request_update`] happens to be implemented in such a way that it causes
     /// events available at the time it is called to be dispatched. Users should not rely on this.
+    #[instrument]
     pub async fn request_update(
         &mut self,
         buffer_id: BufferId,
@@ -197,20 +223,20 @@ impl Handle {
             .get_mut(&buffer_id)
             .ok_or(RequestUpdateError::UnregisteredBuffer)?;
 
-        let ready = unsafe { evdi_request_update(handle_sys, buffer_id.sys()) };
+        let ready = unsafe {
+            let span = span!(Level::TRACE, "evdi_request_update", handle = ?handle_sys, ?buffer_id);
+            let _enter = span.enter();
+            evdi_request_update(handle_sys, buffer_id.sys())
+        };
+
         if !ready {
             Self::dispatch_events_sys(user_data_sys, handle_sys);
-            tokio::select! {
-                resp = buffer.update_ready.recv() => {
-                    resp.expect("Buffer update channel must not be closed");
-                }
-                _ = time::sleep(timeout) => {
-                    return Err(RequestUpdateError::Timeout)
-                }
-            }
+            Self::await_buffer_update_ready(buffer, timeout).await?;
         }
 
         unsafe {
+            let span = span!(Level::TRACE, "evdi_grab_pixels", handle = ?handle_sys, ?buffer_id);
+            let _enter = span.enter();
             evdi_grab_pixels(
                 handle_sys as *mut evdi_device_context,
                 buffer.rects_ptr_sys(),
@@ -223,6 +249,24 @@ impl Handle {
         Ok(())
     }
 
+    #[instrument]
+    async fn await_buffer_update_ready(
+        buffer: &mut Buffer,
+        timeout: Duration,
+    ) -> Result<(), RequestUpdateError> {
+        tokio::select! {
+            resp = buffer.update_ready.recv() => {
+                resp.expect("Buffer update channel must not be closed");
+                Ok(())
+            }
+            _ = time::sleep(timeout) => {
+                error!(?buffer, ?timeout, "await_buffer_update_ready timed out");
+                Err(RequestUpdateError::Timeout)
+            }
+        }
+    }
+
+    #[instrument]
     pub fn enable_cursor_events(&self, enable: bool) {
         unsafe {
             evdi_enable_cursor_events(self.sys, enable);
@@ -239,6 +283,7 @@ impl Handle {
         Self::dispatch_events_sys(self as *const Handle, self.sys);
     }
 
+    #[instrument]
     fn dispatch_events_sys(user_data: *const Handle, handle: evdi_handle) {
         let mut ctx = evdi_event_context {
             dpms_handler: None,
@@ -258,6 +303,7 @@ impl Handle {
     ///
     /// A handle is automatically disconnected and closed on drop, you only need this if you want
     /// to keep the `UnconnectedHandle` around to potentially connect to later.
+    #[instrument]
     pub fn disconnect(self) -> UnconnectedHandle {
         let sys = self.sys;
 
@@ -273,6 +319,15 @@ impl Handle {
     extern "C" fn mode_changed_handler_caller(mode: evdi_mode, user_data: *mut c_void) {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
 
+        let span = span!(
+            Level::TRACE,
+            "mode_changed_handler_caller",
+            ?mode,
+            ?user_data,
+            handle = ?handle.sys,
+        );
+        let _enter = span.enter();
+
         if let Err(err) = handle.events.mode_sender.send(Some(mode.into())) {
             eprintln!(
                 "Dropping msg. Mode change receiver closed, but callback called: {:?}",
@@ -284,21 +339,18 @@ impl Handle {
     extern "C" fn update_ready_handler_caller(buf: c_int, user_data: *mut c_void) {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
 
+        let span = span!(Level::TRACE, "update_ready_handler_caller", buf, ?user_data, handle = ?handle.sys);
+        let _enter = span.enter();
+
         let id = BufferId::new(buf);
         let buf = handle.buffers.get(&id);
 
         if let Some(buf) = buf {
-            if let Err(err) = buf.send_update_ready.send(()) {
-                eprintln!(
-                    "Dropping msg. Update ready receiver closed, but callback called: {:?}",
-                    err
-                );
+            if buf.send_update_ready.send(()).is_err() {
+                error!("Dropping msg. Update ready receiver closed, but callback called");
             }
         } else {
-            eprintln!(
-                "Dropping msg. No update ready channel for buffer {:?}, but callback called",
-                id
-            );
+            error!("Dropping msg. No update ready channel for buffer, but callback called");
         }
     }
 
@@ -321,7 +373,13 @@ impl Handle {
 impl Drop for Handle {
     fn drop(&mut self) {
         unsafe {
+            let span = span!(Level::TRACE, "evdi_disconnect", handle = ?self.sys);
+            let _enter = span.enter();
             evdi_disconnect(self.sys);
+        }
+        unsafe {
+            let span = span!(Level::TRACE, "evdi_close", handle = ?self.sys);
+            let _enter = span.enter();
             evdi_close(self.sys);
         }
     }
@@ -360,33 +418,21 @@ pub enum RequestUpdateError {
 #[cfg(test)]
 pub mod tests {
     use std::fs::File;
-    use std::time::Duration;
 
     use super::*;
+    use crate::test_common::*;
 
-    const TIMEOUT: Duration = Duration::from_secs(1);
-
-    pub async fn handle_fixture() -> Handle {
-        DeviceNode::get()
-            .unwrap()
-            .open()
-            .unwrap()
-            .connect(&DeviceConfig::sample(), TIMEOUT)
-            .await
-            .unwrap()
-    }
-
-    #[tokio::test]
+    #[ltest(atest)]
     async fn can_connect() {
         handle_fixture().await;
     }
 
-    #[tokio::test]
+    #[ltest(atest)]
     async fn can_enable_cursor_events() {
         handle_fixture().await.enable_cursor_events(true);
     }
 
-    #[tokio::test]
+    #[ltest(atest)]
     async fn can_receive_mode() {
         let mut handle = handle_fixture().await;
         handle.dispatch_events();
@@ -395,7 +441,7 @@ pub mod tests {
         assert!(mode.height > 100);
     }
 
-    #[tokio::test]
+    #[ltest(atest)]
     async fn update_can_be_called_multiple_times() {
         let mut handle = handle_fixture().await;
 
@@ -424,7 +470,7 @@ pub mod tests {
         handle.get_buffer(buf_id).unwrap()
     }
 
-    #[tokio::test]
+    #[ltest(atest)]
     async fn bytes_is_non_empty() {
         let mut handle = handle_fixture().await;
         let buf = get_update(&mut handle).await;
@@ -445,7 +491,7 @@ pub mod tests {
         );
     }
 
-    #[tokio::test]
+    #[ltest(atest)]
     async fn can_output_debug() {
         let mut handle = handle_fixture().await;
         let buf = get_update(&mut handle).await;
@@ -455,7 +501,7 @@ pub mod tests {
         buf.debug_write_to_ppm(&mut f).unwrap();
     }
 
-    #[tokio::test]
+    #[ltest(atest)]
     async fn can_disconnect() {
         let mut handle = handle_fixture().await;
 
@@ -468,7 +514,7 @@ pub mod tests {
         }
     }
 
-    #[tokio::test]
+    #[ltest(atest)]
     async fn cannot_get_buffer_after_unregister() {
         let mut handle = handle_fixture().await;
         handle.dispatch_events();
