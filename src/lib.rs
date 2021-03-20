@@ -9,15 +9,15 @@
 //! you want to receive logs from the wrapped library instead of having them written to stdout.
 //!
 //! ## Not thread safe
-//! Evdi is not thread safe, and you cannot block the thread it runs on or your virtual and real
-//! misbehave.
+//! Evdi is not thread safe, and you cannot block the thread it runs for too long as your real and
+//! virtual devices will not receive events.
 //!
 //! ## Alpha quality
 //! This library is alpha quality. If your display starts behaving weirdly, rebooting may help.
 //!
-//! The underlying library this wraps handles errors loosly. Many errors are handled by logging
-//! a message and continuing. This wrapper only adds error information when doing so is easy. Normal
-//! usage of this api may lead to silent failures or crashes.
+//! The underlying library this wraps handles most errors by logging a message and continuing.
+//! This wrapper only adds error information when doing so is easy. Normal usage of this api may
+//! lead to silent failures or crashes.
 //!
 //! ## Basic usage
 //!
