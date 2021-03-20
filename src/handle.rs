@@ -101,7 +101,7 @@ pub struct Handle {
     sys: evdi_handle,
     device_config: DeviceConfig,
     buffers: HashMap<BufferId, Buffer>,
-    /// Holds [`::crossbeam_channel::Receiver`]s for events.
+    /// Holds [`::tokio::sync::mpsc::Receiver`]s for events.
     ///
     /// ```
     /// # use evdi::prelude::*;
