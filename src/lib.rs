@@ -24,7 +24,7 @@
 //! const RECEIVE_INITIAL_MODE_TIMEOUT: Duration = Duration::from_secs(1);
 //! const UPDATE_BUFFER_TIMEOUT: Duration = Duration::from_millis(100);
 //!
-//! # fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
+//! # tokio_test::block_on(async {
 //! // If get returns None you need to call DeviceNode::add with superuser permissions.
 //! let device = DeviceNode::get().unwrap();
 //!
@@ -32,11 +32,13 @@
 //! let device_config = DeviceConfig::sample();
 //!
 //! let unconnected_handle = device.open()?;
-//! let mut handle = unconnected_handle.connect(&device_config, READY_TIMEOUT)?;
+//! let mut handle = unconnected_handle.connect(&device_config, READY_TIMEOUT).await?;
 //!
-//! // For simplicity don't handle mode changed events in this example
+//! // For simplicity don't handle the mode changing after we start
 //! handle.dispatch_events();
-//! let mode = handle.events.mode.recv_timeout(RECEIVE_INITIAL_MODE_TIMEOUT)?;
+//! handle.events.mode.changed().await;
+//! let mode = handle.events.mode.borrow()
+//!     .expect("Mode will only be none before the first mode is received.");
 //!
 //! // For simplicity, we only use one buffer. You may want to use more than one buffer so that you
 //! // can send the contents of one buffer while updating another.
@@ -44,7 +46,7 @@
 //!
 //! # let mut loop_count = 0;
 //! loop {
-//!     handle.request_update(buffer_id, UPDATE_BUFFER_TIMEOUT)?;
+//!     handle.request_update(buffer_id, UPDATE_BUFFER_TIMEOUT).await?;
 //!     let buf = handle.get_buffer(buffer_id).expect("Buffer exists");
 //!     // Do something with the bytes
 //!     let _bytes = buf.bytes();
@@ -53,8 +55,8 @@
 //! #   loop_count += 1;
 //! }
 //!
-//! # Ok(())
-//! # }
+//! # Ok::<(), Box<dyn Error>>(())
+//! # });
 //! ```
 //!
 //! # Managing device nodes

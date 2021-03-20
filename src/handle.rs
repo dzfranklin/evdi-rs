@@ -1,14 +1,15 @@
 //! Performs most operations
 
-use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use std::collections::HashMap;
 use std::mem::forget;
 use std::os::raw::{c_int, c_uint, c_void};
 use std::time::Duration;
 
 use evdi_sys::*;
-use filedescriptor::{poll, pollfd, POLLIN};
 use thiserror::Error;
+use tokio::io::unix::AsyncFd;
+use tokio::sync::watch;
+use tokio::time;
 
 use crate::prelude::*;
 
@@ -24,12 +25,17 @@ impl UnconnectedHandle {
     /// ```
     /// # use evdi::prelude::*;
     /// # use std::time::Duration;
+    /// use evdi::handle::PollReadyError;
+    /// # tokio_test::block_on(async {
     /// let device: DeviceNode = DeviceNode::get().unwrap();
     /// let handle = device
     ///     .open().unwrap()
-    ///     .connect(&DeviceConfig::sample(), Duration::from_secs(1));
+    ///     .connect(&DeviceConfig::sample(), Duration::from_secs(1))
+    ///     .await?;
+    /// # Ok::<(), PollReadyError>(())
+    /// # });
     /// ```
-    pub fn connect(
+    pub async fn connect(
         self,
         config: &DeviceConfig,
         ready_timeout: Duration,
@@ -55,15 +61,17 @@ impl UnconnectedHandle {
 
         let handle = Handle::new(sys, config);
 
-        let poll_fd = unsafe { evdi_get_event_ready(handle.sys) };
-        poll(
-            &mut [pollfd {
-                fd: poll_fd,
-                events: POLLIN,
-                revents: 0,
-            }],
-            Some(ready_timeout),
-        )?;
+        let raw_fd = unsafe { evdi_get_event_ready(handle.sys) };
+        let fd = AsyncFd::new(raw_fd)?;
+
+        tokio::select! {
+            guard = fd.readable() => {
+                guard?.retain_ready()
+            },
+            _ = tokio::time::sleep(ready_timeout) => {
+                return Err(PollReadyError::Timeout)
+            },
+        }
 
         Ok(handle)
     }
@@ -81,8 +89,10 @@ impl Drop for UnconnectedHandle {
 
 #[derive(Debug, Error)]
 pub enum PollReadyError {
-    #[error("The polling library we currently use doesn't provide detailed errors")]
-    Generic(#[from] anyhow::Error),
+    #[error("IO")]
+    Io(#[from] std::io::Error),
+    #[error("Timeout")]
+    Timeout,
 }
 
 /// Represents an evdi handle that is connected and ready.
@@ -96,17 +106,26 @@ pub struct Handle {
     /// ```
     /// # use evdi::prelude::*;
     /// # use std::time::Duration;
-    /// # use crossbeam_channel::{RecvTimeoutError, TryRecvError};
+    /// # tokio_test::block_on(async {
     /// # let device: DeviceNode = DeviceNode::get().unwrap();
     /// # let timeout = Duration::from_secs(1);
     /// # let mut handle = device.open().unwrap()
-    /// #   .connect(&DeviceConfig::sample(), timeout).unwrap();
+    /// #   .connect(&DeviceConfig::sample(), timeout).await.unwrap();
     /// #
-    /// // Block until we get a mode or timeout
-    /// let mode: Result<Mode, RecvTimeoutError> = handle.events.mode.recv_timeout(timeout);
+    /// // Initially events will be None
+    /// {
+    ///     let mode = handle.events.mode.borrow();
+    ///     assert!(mode.is_none());
+    /// }
     ///
-    /// // Check if a mode is available
-    /// let mode: Result<Mode, TryRecvError> = handle.events.mode.try_recv();
+    /// handle.dispatch_events();
+    ///
+    /// // Wait until we get a mode
+    /// handle.events.mode.changed().await;
+    ///
+    /// let mode = handle.events.mode.borrow();
+    /// assert!(mode.is_some());
+    /// # });
     /// ```
     pub events: HandleEvents,
 }
@@ -143,19 +162,24 @@ impl Handle {
     /// ```
     /// # use evdi::prelude::*;
     /// # use std::time::Duration;
+    /// # use std::error::Error;
+    /// # tokio_test::block_on(async {
     /// # let timeout = Duration::from_secs(1);
-    /// # let mut handle = DeviceNode::get().unwrap().open().unwrap()
-    /// #     .connect(&DeviceConfig::sample(), timeout).unwrap();
+    /// # let mut handle = DeviceNode::get().unwrap().open()?
+    /// #     .connect(&DeviceConfig::sample(), timeout).await?;
     /// # handle.dispatch_events();
-    /// # let mode = handle.events.mode.recv_timeout(timeout).unwrap();
+    /// # handle.events.mode.changed().await;
+    /// # let mode = handle.events.mode.borrow().unwrap();
     /// let buf_id = handle.new_buffer(&mode);
-    /// handle.request_update(buf_id, timeout).expect("Update available within timeout");
+    /// handle.request_update(buf_id, timeout).await?;
     /// let buf_data = handle.get_buffer(buf_id).expect("Buffer exists");
+    /// # Ok::<(), Box<dyn Error>>(())
+    /// # });
     /// ```
     ///
     /// Note: [`Handle::request_update`] happens to be implemented in such a way that it causes
     /// events available at the time it is called to be dispatched. Users should not rely on this.
-    pub fn request_update(
+    pub async fn request_update(
         &mut self,
         buffer_id: BufferId,
         timeout: Duration,
@@ -176,7 +200,14 @@ impl Handle {
         let ready = unsafe { evdi_request_update(handle_sys, buffer_id.sys()) };
         if !ready {
             Self::dispatch_events_sys(user_data_sys, handle_sys);
-            buffer.block_until_update_ready(timeout)?;
+            tokio::select! {
+                resp = buffer.update_ready.recv() => {
+                    resp.expect("Buffer update channel must not be closed");
+                }
+                _ = time::sleep(timeout) => {
+                    return Err(RequestUpdateError::Timeout)
+                }
+            }
         }
 
         unsafe {
@@ -241,7 +272,8 @@ impl Handle {
 
     extern "C" fn mode_changed_handler_caller(mode: evdi_mode, user_data: *mut c_void) {
         let handle = unsafe { Self::handle_from_user_data(user_data) };
-        if let Err(err) = handle.events.mode_sender.send(mode.into()) {
+
+        if let Err(err) = handle.events.mode_sender.send(Some(mode.into())) {
             eprintln!(
                 "Dropping msg. Mode change receiver closed, but callback called: {:?}",
                 err
@@ -256,12 +288,14 @@ impl Handle {
         let buf = handle.buffers.get(&id);
 
         if let Some(buf) = buf {
-            if let Err(err) = buf.update_ready_sender().send(()) {
-                eprintln!(
-                    "Dropping msg. Update ready receiver closed, but callback called: {:?}",
-                    err
-                );
-            }
+            tokio::spawn(async move {
+                if let Err(err) = buf.send_update_ready.send(()).await {
+                    eprintln!(
+                        "Dropping msg. Update ready receiver closed, but callback called: {:?}",
+                        err
+                    );
+                }
+            });
         } else {
             eprintln!(
                 "Dropping msg. No update ready channel for buffer {:?}, but callback called",
@@ -305,13 +339,13 @@ impl Eq for Handle {}
 
 #[derive(Debug)]
 pub struct HandleEvents {
-    pub mode: Receiver<Mode>,
-    mode_sender: Sender<Mode>,
+    pub mode: watch::Receiver<Option<Mode>>,
+    mode_sender: watch::Sender<Option<Mode>>,
 }
 
 impl Default for HandleEvents {
     fn default() -> Self {
-        let (mode_sender, mode) = bounded(1);
+        let (mode_sender, mode) = watch::channel(None);
 
         Self { mode, mode_sender }
     }
@@ -319,79 +353,83 @@ impl Default for HandleEvents {
 
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum RequestUpdateError {
-    #[error("Kernel chose to update async, timeout waiting for")]
-    Timeout(#[from] RecvTimeoutError),
+    #[error("Kernel chose to update async, timeout waiting for response")]
+    Timeout,
     #[error("The buffer provided does not exist or is attached to a different handle")]
     UnregisteredBuffer,
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
     use std::time::Duration;
 
     use super::*;
-    use std::fs::File;
 
     const TIMEOUT: Duration = Duration::from_secs(1);
 
-    fn handle_fixture() -> Handle {
+    async fn handle_fixture() -> Handle {
         DeviceNode::get()
             .unwrap()
             .open()
             .unwrap()
             .connect(&DeviceConfig::sample(), TIMEOUT)
+            .await
             .unwrap()
     }
 
-    #[test]
-    fn can_connect() {
-        handle_fixture();
+    #[tokio::test]
+    async fn can_connect() {
+        handle_fixture().await;
     }
 
-    #[test]
-    fn can_enable_cursor_events() {
-        handle_fixture().enable_cursor_events(true);
+    #[tokio::test]
+    async fn can_enable_cursor_events() {
+        handle_fixture().await.enable_cursor_events(true);
     }
 
-    #[test]
-    fn can_receive_mode() {
-        let handle = handle_fixture();
+    #[tokio::test]
+    async fn can_receive_mode() {
+        let mut handle = handle_fixture().await;
         handle.dispatch_events();
-        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
+        handle.events.mode.changed().await.unwrap();
+        let mode = handle.events.mode.borrow().unwrap();
         assert!(mode.height > 100);
     }
 
-    #[test]
-    fn update_can_be_called_multiple_times() {
-        let mut handle = handle_fixture();
+    #[tokio::test]
+    async fn update_can_be_called_multiple_times() {
+        let mut handle = handle_fixture().await;
 
         handle.dispatch_events();
-        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
+        handle.events.mode.changed().await.unwrap();
+        let mode = handle.events.mode.borrow().unwrap();
 
         let buf_id = handle.new_buffer(&mode);
 
         for _ in 0..10 {
-            handle.request_update(buf_id, TIMEOUT).unwrap();
+            handle.request_update(buf_id, TIMEOUT).await.unwrap();
         }
     }
 
-    fn get_update(handle: &mut Handle) -> &Buffer {
+    async fn get_update(handle: &mut Handle) -> &Buffer {
         handle.dispatch_events();
-        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
+        handle.events.mode.changed().await.unwrap();
+        let mode = handle.events.mode.borrow().unwrap();
         let buf_id = handle.new_buffer(&mode);
 
         // Give us some time to settle
         for _ in 0..20 {
-            handle.request_update(buf_id, TIMEOUT).unwrap();
+            handle.request_update(buf_id, TIMEOUT).await.unwrap();
         }
 
         handle.get_buffer(buf_id).unwrap()
     }
 
-    #[test]
-    fn bytes_is_non_empty() {
-        let mut handle = handle_fixture();
-        let buf = get_update(&mut handle);
+    #[tokio::test]
+    async fn bytes_is_non_empty() {
+        let mut handle = handle_fixture().await;
+        let buf = get_update(&mut handle).await;
 
         let mut total: u32 = 0;
         let mut len: u32 = 0;
@@ -409,37 +447,39 @@ mod tests {
         );
     }
 
-    #[test]
-    fn can_output_debug() {
-        let mut handle = handle_fixture();
-        let buf = get_update(&mut handle);
+    #[tokio::test]
+    async fn can_output_debug() {
+        let mut handle = handle_fixture().await;
+        let buf = get_update(&mut handle).await;
 
         let mut f = File::create("TEMP_debug_rect.pnm").unwrap();
 
         buf.debug_write_to_ppm(&mut f).unwrap();
     }
 
-    #[test]
-    fn can_disconnect() {
-        let mut handle = handle_fixture();
+    #[tokio::test]
+    async fn can_disconnect() {
+        let mut handle = handle_fixture().await;
 
         for _ in 0..10 {
             let unconnected = handle.disconnect();
             handle = unconnected
                 .connect(&DeviceConfig::sample(), TIMEOUT)
+                .await
                 .unwrap();
         }
     }
 
-    #[test]
-    fn cannot_get_buffer_after_unregister() {
-        let mut handle = handle_fixture();
+    #[tokio::test]
+    async fn cannot_get_buffer_after_unregister() {
+        let mut handle = handle_fixture().await;
         handle.dispatch_events();
-        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
+        handle.events.mode.changed().await.unwrap();
+        let mode = handle.events.mode.borrow().unwrap();
 
         let buf = handle.new_buffer(&mode);
         handle.unregister_buffer(buf);
-        let res = handle.request_update(buf, TIMEOUT);
+        let res = handle.request_update(buf, TIMEOUT).await;
         assert_eq!(res.unwrap_err(), RequestUpdateError::UnregisteredBuffer);
     }
 }

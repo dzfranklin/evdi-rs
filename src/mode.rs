@@ -3,7 +3,7 @@ use std::convert::TryInto;
 use drm_fourcc::{DrmFormat, UnrecognizedFourcc};
 use evdi_sys::evdi_mode;
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Mode {
     pub width: u32,
     pub height: u32,

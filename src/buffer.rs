@@ -1,17 +1,16 @@
 //! Buffer to receive virtual screen pixels
 
-use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 use std::fs::File;
 use std::io;
 use std::io::Write;
 use std::os::raw::{c_int, c_void};
-use std::time::Duration;
 
 use drm_fourcc::UnrecognizedFourcc;
 use evdi_sys::*;
 use rand::Rng;
 
 use crate::prelude::*;
+use tokio::sync::mpsc;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct BufferId(i32);
@@ -41,34 +40,36 @@ pub struct Buffer {
     /// # use evdi::prelude::*;
     /// # use std::time::Duration;
     /// # use std::error::Error;
-    /// # fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    /// # tokio_test::block_on(async {
     /// let timeout = Duration::from_secs(1);
     /// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
-    /// #     .connect(&DeviceConfig::sample(), timeout)?;
+    /// #     .connect(&DeviceConfig::sample(), timeout)
+    /// #     .await?;
     /// # handle.dispatch_events();
-    /// # let mode = handle.events.mode.recv_timeout(timeout)?;
+    /// # handle.events.mode.changed().await?;
+    /// # let mode = handle.events.mode.borrow().unwrap();
     /// let buf_id = handle.new_buffer(&mode);
     ///
     /// assert!(handle.get_buffer(buf_id).expect("Buffer exists").version.is_none());
     ///
-    /// handle.request_update(buf_id, timeout)?;
+    /// handle.request_update(buf_id, timeout).await?;
     /// let after_first = handle
     ///     .get_buffer(buf_id).expect("buffer exists")
     ///     .version.expect("Buffer must have been updated");
     ///
-    /// handle.request_update(buf_id, timeout)?;
+    /// handle.request_update(buf_id, timeout).await?;
     /// let after_second = handle
     ///     .get_buffer(buf_id).expect("buffer exists")
     ///     .version.expect("Buffer must have been updated");
     ///
     /// assert!(after_second > after_first);
-    /// # Ok(())
-    /// # }
+    /// # Ok::<(), Box<dyn Error>>(())
+    /// # });
     /// ```
     pub version: Option<u32>,
     pub(crate) id: BufferId,
-    update_ready: Receiver<()>,
-    send_update_ready: Sender<()>,
+    pub(crate) update_ready: mpsc::Receiver<()>,
+    pub(crate) send_update_ready: mpsc::Sender<()>,
     buffer: Box<[u8]>,
     rects: Box<[evdi_rect]>,
     num_rects: i32,
@@ -90,20 +91,21 @@ const BGRA_DEPTH: usize = 4;
 /// # use evdi::prelude::*;
 /// # use std::time::Duration;
 /// # use std::error::Error;
-/// # fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+/// # tokio_test::block_on(async {
 /// # let timeout = Duration::from_secs(1);
 /// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
-/// #     .connect(&DeviceConfig::sample(), timeout)?;
+/// #     .connect(&DeviceConfig::sample(), timeout).await?;
 /// # handle.dispatch_events();
-/// # let mode = handle.events.mode.recv_timeout(timeout)?;
+/// # handle.events.mode.changed().await?;
+/// # let mode = handle.events.mode.borrow().unwrap();
 /// #
 /// let buffer_id: BufferId = handle.new_buffer(&mode);
 /// let buffer_data: &Buffer = handle.get_buffer(buffer_id).expect("Buffer exists");
 ///
 /// handle.unregister_buffer(buffer_id);
 /// assert!(handle.get_buffer(buffer_id).is_none());
-/// # Ok(())
-/// # }
+/// # Ok::<(), Box<dyn Error>>(())
+/// # });
 /// ```
 impl Buffer {
     /// Get a reference to the underlying bytes of this buffer.
@@ -157,17 +159,6 @@ impl Buffer {
         Ok(())
     }
 
-    pub(crate) fn update_ready_sender(&self) -> Sender<()> {
-        self.send_update_ready.clone()
-    }
-
-    pub(crate) fn block_until_update_ready(
-        &self,
-        timeout: Duration,
-    ) -> Result<(), RecvTimeoutError> {
-        self.update_ready.recv_timeout(timeout)
-    }
-
     pub(crate) fn rects_ptr_sys(&self) -> *mut evdi_rect {
         self.rects.as_ptr() as *mut evdi_rect
     }
@@ -216,7 +207,7 @@ impl Buffer {
         ]
         .into_boxed_slice();
 
-        let (send_update_ready, update_ready) = unbounded();
+        let (send_update_ready, update_ready) = mpsc::channel(10);
 
         Buffer {
             version: None,
@@ -242,28 +233,31 @@ pub mod tests {
 
     const TIMEOUT: Duration = Duration::from_secs(1);
 
-    fn handle_fixture() -> Handle {
+    async fn handle_fixture() -> Handle {
         DeviceNode::get()
             .unwrap()
             .open()
             .unwrap()
             .connect(&DeviceConfig::sample(), TIMEOUT)
+            .await
             .unwrap()
     }
 
-    #[test]
-    fn can_create_buffer() {
-        let mut handle = handle_fixture();
+    #[tokio::test]
+    async fn can_create_buffer() {
+        let mut handle = handle_fixture().await;
         handle.dispatch_events();
-        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
+        handle.events.mode.changed().await.unwrap();
+        let mode = handle.events.mode.borrow().unwrap();
         handle.new_buffer(&mode);
     }
 
-    #[test]
-    fn can_access_buffer_sys() {
-        let mut handle = handle_fixture();
+    #[tokio::test]
+    async fn can_access_buffer_sys() {
+        let mut handle = handle_fixture().await;
         handle.dispatch_events();
-        let mode = handle.events.mode.recv_timeout(TIMEOUT).unwrap();
+        handle.events.mode.changed().await.unwrap();
+        let mode = handle.events.mode.borrow().unwrap();
         handle.new_buffer(&mode).sys();
     }
 }
