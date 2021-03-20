@@ -4,6 +4,9 @@
 //! High-level bindings to [evdi](https://github.com/DisplayLink/evdi), a library for managing
 //! virtual displays on linux.
 //!
+//! Evdi is not thread safe, and you cannot block the thread it runs on or your virtual and real
+//! misbehave.
+//!
 //! This library is alpha quality. If your display starts behaving weirdly, rebooting may help.
 //!
 //! The underlying library this wraps handles errors loosly. Many errors are handled by logging
