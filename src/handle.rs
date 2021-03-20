@@ -288,14 +288,12 @@ impl Handle {
         let buf = handle.buffers.get(&id);
 
         if let Some(buf) = buf {
-            tokio::spawn(async move {
-                if let Err(err) = buf.send_update_ready.send(()).await {
-                    eprintln!(
-                        "Dropping msg. Update ready receiver closed, but callback called: {:?}",
-                        err
-                    );
-                }
-            });
+            if let Err(err) = buf.send_update_ready.send(()) {
+                eprintln!(
+                    "Dropping msg. Update ready receiver closed, but callback called: {:?}",
+                    err
+                );
+            }
         } else {
             eprintln!(
                 "Dropping msg. No update ready channel for buffer {:?}, but callback called",

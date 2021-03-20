@@ -10,7 +10,7 @@ use evdi_sys::*;
 use rand::Rng;
 
 use crate::prelude::*;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct BufferId(i32);
@@ -68,8 +68,8 @@ pub struct Buffer {
     /// ```
     pub version: Option<u32>,
     pub(crate) id: BufferId,
-    pub(crate) update_ready: mpsc::Receiver<()>,
-    pub(crate) send_update_ready: mpsc::Sender<()>,
+    pub(crate) update_ready: broadcast::Receiver<()>,
+    pub(crate) send_update_ready: broadcast::Sender<()>,
     buffer: Box<[u8]>,
     rects: Box<[evdi_rect]>,
     num_rects: i32,
@@ -207,7 +207,7 @@ impl Buffer {
         ]
         .into_boxed_slice();
 
-        let (send_update_ready, update_ready) = mpsc::channel(10);
+        let (send_update_ready, update_ready) = broadcast::channel(10);
 
         Buffer {
             version: None,
