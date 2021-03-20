@@ -51,7 +51,7 @@
 //!     // Do something with the bytes
 //!     let _bytes = buf.bytes();
 //! #
-//! #   if loop_count > 10 { break; }
+//! #   if loop_count > 2 { break; }
 //! #   loop_count += 1;
 //! }
 //!

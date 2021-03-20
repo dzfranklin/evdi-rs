@@ -407,7 +407,7 @@ pub mod tests {
 
         let buf_id = handle.new_buffer(&mode);
 
-        for _ in 0..10 {
+        for _ in 0..5 {
             handle.request_update(buf_id, TIMEOUT).await.unwrap();
         }
     }
@@ -419,7 +419,7 @@ pub mod tests {
         let buf_id = handle.new_buffer(&mode);
 
         // Give us some time to settle
-        for _ in 0..20 {
+        for _ in 0..5 {
             handle.request_update(buf_id, TIMEOUT).await.unwrap();
         }
 
