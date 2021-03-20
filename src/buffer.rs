@@ -227,21 +227,7 @@ impl Buffer {
 
 #[cfg(test)]
 pub mod tests {
-    use std::time::Duration;
-
-    use super::*;
-
-    const TIMEOUT: Duration = Duration::from_secs(1);
-
-    async fn handle_fixture() -> Handle {
-        DeviceNode::get()
-            .unwrap()
-            .open()
-            .unwrap()
-            .connect(&DeviceConfig::sample(), TIMEOUT)
-            .await
-            .unwrap()
-    }
+    use crate::handle::tests::handle_fixture;
 
     #[tokio::test]
     async fn can_create_buffer() {

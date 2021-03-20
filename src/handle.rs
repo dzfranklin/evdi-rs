@@ -360,7 +360,7 @@ pub enum RequestUpdateError {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::fs::File;
     use std::time::Duration;
 
@@ -368,7 +368,7 @@ mod tests {
 
     const TIMEOUT: Duration = Duration::from_secs(1);
 
-    async fn handle_fixture() -> Handle {
+    pub async fn handle_fixture() -> Handle {
         DeviceNode::get()
             .unwrap()
             .open()
