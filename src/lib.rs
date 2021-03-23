@@ -1,5 +1,6 @@
 #![feature(with_options)]
 #![feature(try_trait)]
+#![feature(debug_non_exhaustive)]
 
 //! High-level bindings to [evdi](https://github.com/DisplayLink/evdi), a library for managing
 //! virtual displays on linux.
@@ -26,8 +27,8 @@
 //! # use std::time::Duration;
 //! # use evdi::prelude::*;
 //! #
-//! const READY_TIMEOUT: Duration = Duration::from_secs(1);
-//! const UPDATE_BUFFER_TIMEOUT: Duration = Duration::from_millis(100);
+//! const AWAIT_MODE_TIMEOUT: Duration = Duration::from_millis(250);
+//! const UPDATE_BUFFER_TIMEOUT: Duration = Duration::from_millis(20);
 //!
 //! # tokio_test::block_on(async {
 //! // If get returns None you need to call DeviceNode::add with superuser permissions.
@@ -37,13 +38,10 @@
 //! let device_config = DeviceConfig::sample();
 //!
 //! let unconnected_handle = device.open()?;
-//! let mut handle = unconnected_handle.connect(&device_config, READY_TIMEOUT).await?;
+//! let mut handle = unconnected_handle.connect(&device_config);
 //!
 //! // For simplicity don't handle the mode changing after we start
-//! handle.dispatch_events();
-//! handle.events.mode.changed().await.unwrap();
-//! let mode = handle.events.mode.borrow()
-//!     .expect("Mode will only be none before the first mode is received.");
+//! let mode = handle.events.await_mode(AWAIT_MODE_TIMEOUT).await?;
 //!
 //! // For simplicity, we only use one buffer. You may want to use more than one buffer so that you
 //! // can send the contents of one buffer while updating another.
@@ -84,25 +82,28 @@
 //! your users don't need to run your main binary with superuser permissions.
 
 use std::ffi::CStr;
+use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::option::NoneError;
 use std::os::raw::{c_char, c_void};
 
 pub use drm_fourcc::DrmFormat;
-pub use evdi_sys as fii;
+pub use evdi_sys as ffi;
 use evdi_sys::*;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::fmt::{Debug, Formatter};
 use std::ptr::null_mut;
+use std::slice;
 use std::sync::Once;
 use tracing::{info, instrument};
 
 pub mod buffer;
 pub mod device_config;
 pub mod device_node;
+pub mod events;
 pub mod handle;
-pub mod mode;
 pub mod prelude;
 
 #[cfg(test)]
@@ -265,12 +266,53 @@ impl LibVersion {
     }
 }
 
+pub(crate) struct OwnedLibcArray<T> {
+    ptr: *const T,
+    len: usize,
+}
+
+impl<T> OwnedLibcArray<T> {
+    /// Safety: ptr must point to an array allocated by libc, and len must be the length of the
+    /// array. LibcArray must "own" ptr: no one else can write to it, and we must be responsible for
+    /// freeing it.
+    pub(crate) unsafe fn new(ptr: *const T, len: usize) -> Self {
+        Self { ptr, len }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[T] {
+        unsafe {
+            // Safety: Invariants required by Self::new
+            slice::from_raw_parts(self.ptr, self.len)
+        }
+    }
+}
+
+// Safety: By invariants of new no one else ever writes to, and we never write to.
+unsafe impl<T> Send for OwnedLibcArray<T> {}
+
+// Safety: By invariants of new no one else ever writes to, and we never write to.
+unsafe impl<T> Sync for OwnedLibcArray<T> {}
+
+impl<T> Drop for OwnedLibcArray<T> {
+    fn drop(&mut self) {
+        unsafe {
+            libc::free(self.ptr as *mut c_void);
+        }
+    }
+}
+
+impl<T: Debug> Debug for OwnedLibcArray<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.as_slice().iter()).finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
+    use crate::test_common::*;
     use crate::*;
     use logtest::Record;
-    use test_env_log::test as ltest;
     use tracing::log::Level;
 
     #[test]

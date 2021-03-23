@@ -1,11 +1,15 @@
 //! Config of virtual output display
 
+use derivative::Derivative;
+
 /// Describes a virtual display to output to
-#[derive(Debug, Clone)]
+#[derive(Derivative)]
+#[derivative(Debug, Clone)]
 pub struct DeviceConfig {
+    #[derivative(Debug = "ignore")]
     edid: Vec<u8>,
-    width_pixels: u32,
-    height_pixels: u32,
+    pub width_pixels: u32,
+    pub height_pixels: u32,
 }
 
 impl DeviceConfig {

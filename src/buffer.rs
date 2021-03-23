@@ -1,16 +1,17 @@
 //! Buffer to receive virtual screen pixels
 
+use std::fmt::Debug;
 use std::fs::File;
 use std::io;
 use std::io::Write;
 use std::os::raw::{c_int, c_void};
 
+use derivative::Derivative;
 use drm_fourcc::UnrecognizedFourcc;
 use evdi_sys::*;
 use rand::Rng;
 
 use crate::prelude::*;
-use tokio::sync::broadcast;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct BufferId(i32);
@@ -21,7 +22,7 @@ impl BufferId {
         Self::new(id)
     }
 
-    pub(crate) fn new(id: i32) -> BufferId {
+    pub fn new(id: i32) -> BufferId {
         BufferId(id)
     }
 
@@ -30,8 +31,15 @@ impl BufferId {
     }
 }
 
+impl From<i32> for BufferId {
+    fn from(sys: i32) -> Self {
+        Self(sys)
+    }
+}
+
 /// A buffer used to store the virtual screen pixels.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Buffer {
     /// None if the buffer never been written to, otherwise Some(n) where n increases by some amount
     /// every time the buffer is written to.
@@ -43,11 +51,8 @@ pub struct Buffer {
     /// # tokio_test::block_on(async {
     /// let timeout = Duration::from_secs(1);
     /// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
-    /// #     .connect(&DeviceConfig::sample(), timeout)
-    /// #     .await?;
-    /// # handle.dispatch_events();
-    /// # handle.events.mode.changed().await?;
-    /// # let mode = handle.events.mode.borrow().unwrap();
+    /// #     .connect(&DeviceConfig::sample());
+    /// # let mode = handle.events.await_mode(timeout).await.unwrap();
     /// let buf_id = handle.new_buffer(&mode);
     ///
     /// assert!(handle.get_buffer(buf_id).expect("Buffer exists").version.is_none());
@@ -68,8 +73,7 @@ pub struct Buffer {
     /// ```
     pub version: Option<u32>,
     pub(crate) id: BufferId,
-    pub(crate) update_ready: broadcast::Receiver<()>,
-    pub(crate) send_update_ready: broadcast::Sender<()>,
+    #[derivative(Debug = "ignore")]
     buffer: Box<[u8]>,
     rects: Box<[evdi_rect]>,
     num_rects: i32,
@@ -94,10 +98,8 @@ const BGRA_DEPTH: usize = 4;
 /// # tokio_test::block_on(async {
 /// # let timeout = Duration::from_secs(1);
 /// # let mut handle = DeviceNode::get().expect("At least on evdi device available").open()?
-/// #     .connect(&DeviceConfig::sample(), timeout).await?;
-/// # handle.dispatch_events();
-/// # handle.events.mode.changed().await?;
-/// # let mode = handle.events.mode.borrow().unwrap();
+/// #     .connect(&DeviceConfig::sample());
+/// # let mode = handle.events.await_mode(timeout).await.unwrap();
 /// #
 /// let buffer_id: BufferId = handle.new_buffer(&mode);
 /// let buffer_data: &Buffer = handle.get_buffer(buffer_id).expect("Buffer exists");
@@ -114,6 +116,10 @@ impl Buffer {
     /// to interpret this.
     pub fn bytes(&self) -> &[u8] {
         self.buffer.as_ref()
+    }
+
+    pub fn rects(&self) -> &[evdi_rect] {
+        &self.rects[0..self.num_rects as usize]
     }
 
     /// Write the pixels to a file in the unoptimized image format [PPM].
@@ -175,7 +181,7 @@ impl Buffer {
             height: self.height as c_int,
             stride: self.stride as c_int,
             rects: self.rects_ptr_sys() as *mut evdi_rect,
-            rect_count: 0,
+            rect_count: self.num_rects,
         }
     }
 
@@ -207,16 +213,12 @@ impl Buffer {
         ]
         .into_boxed_slice();
 
-        let (send_update_ready, update_ready) = broadcast::channel(10);
-
         Buffer {
             version: None,
             id: BufferId::generate(),
-            update_ready,
-            send_update_ready,
             buffer,
             rects,
-            num_rects: -1,
+            num_rects: 0,
             width,
             height,
             stride,
@@ -231,19 +233,15 @@ pub mod tests {
 
     #[ltest(atest)]
     async fn can_create_buffer() {
-        let mut handle = handle_fixture().await;
-        handle.dispatch_events();
-        handle.events.mode.changed().await.unwrap();
-        let mode = handle.events.mode.borrow().unwrap();
+        let mut handle = handle_fixture();
+        let mode = handle.events.await_mode(TIMEOUT).await.unwrap();
         handle.new_buffer(&mode);
     }
 
     #[ltest(atest)]
     async fn can_access_buffer_sys() {
-        let mut handle = handle_fixture().await;
-        handle.dispatch_events();
-        handle.events.mode.changed().await.unwrap();
-        let mode = handle.events.mode.borrow().unwrap();
+        let mut handle = handle_fixture();
+        let mode = handle.events.await_mode(TIMEOUT).await.unwrap();
         handle.new_buffer(&mode).sys();
     }
 }

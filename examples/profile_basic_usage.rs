@@ -1,27 +1,19 @@
+use evdi::handle::RequestUpdateError;
 use evdi::prelude::*;
 use std::error::Error;
 use std::time::Duration;
+use tokio::time::sleep;
 use tracing_flame::FlameLayer;
 use tracing_subscriber::{fmt, prelude::*};
 
-fn setup_global_subscriber() {
-    let fmt_layer = fmt::Layer::default();
+const RUN_FOR: Duration = Duration::from_secs(5);
 
-    let (flame_layer, _guard) = FlameLayer::with_file("./tracing.folded").unwrap();
-
-    tracing_subscriber::registry()
-        .with(fmt_layer)
-        .with(flame_layer)
-        .init();
-}
+const RECEIVE_INITIAL_MODE_TIMEOUT: Duration = Duration::from_secs(1);
+const UPDATE_BUFFER_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    setup_global_subscriber();
-
-    const READY_TIMEOUT: Duration = Duration::from_secs(1);
-    const RECEIVE_INITIAL_MODE_TIMEOUT: Duration = Duration::from_secs(1);
-    const UPDATE_BUFFER_TIMEOUT: Duration = Duration::from_millis(100);
+    setup_tracing();
 
     // If get returns None you need to call DeviceNode::add with superuser permissions.
     let device = DeviceNode::get().unwrap();
@@ -30,24 +22,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let device_config = DeviceConfig::sample();
 
     let unconnected_handle = device.open()?;
-    let mut handle = unconnected_handle
-        .connect(&device_config, READY_TIMEOUT)
-        .await?;
+    let mut handle = unconnected_handle.connect(&device_config);
 
     // For simplicity don't handle the mode changing after we start
-    handle.dispatch_events();
-    handle.events.mode.changed().await.unwrap();
     let mode = handle
         .events
-        .mode
-        .borrow()
-        .expect("Mode will only be none before the first mode is received.");
+        .await_mode(RECEIVE_INITIAL_MODE_TIMEOUT)
+        .await?;
+
+    handle.enable_cursor_events(true);
 
     // For simplicity, we only use one buffer. You may want to use more than one buffer so that you
     // can send the contents of one buffer while updating another.
     let buffer_id = handle.new_buffer(&mode);
 
-    for _ in 0..mode.refresh_rate {
+    tokio::select! {
+        _ = sleep(RUN_FOR) => {}
+        res = mainloop(&mut handle, buffer_id) => res.unwrap(),
+    }
+
+    println!(
+        "\n\nTo visualize the traces run `inferno-flamegraph < tracing.folded > flamegraph.svg` or \
+        `inferno-flamegraph --flamechart < tracing.folded > flamechart.svg`\n\n"
+    );
+
+    Ok(())
+}
+
+async fn mainloop(handle: &mut Handle, buffer_id: BufferId) -> Result<(), RequestUpdateError> {
+    loop {
         handle
             .request_update(buffer_id, UPDATE_BUFFER_TIMEOUT)
             .await?;
@@ -55,6 +58,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // Do something with the bytes
         let _bytes = buf.bytes();
     }
+}
 
-    Ok(())
+fn setup_tracing() {
+    let fmt_layer = fmt::Layer::default();
+
+    let (flame_layer, _guard) = FlameLayer::with_file("./tracing.folded").unwrap();
+
+    tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(flame_layer)
+        .init();
 }

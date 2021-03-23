@@ -19,14 +19,13 @@ const REMOVE_ALL_FILE: &str = "/sys/devices/evdi/remove_all";
 /// Represents a device node (`/dev/dri/card*`).
 #[derive(Debug, PartialEq, Eq)]
 pub struct DeviceNode {
-    id: i32,
+    pub(crate) id: i32,
 }
 
 impl DeviceNode {
     /// Returns an evdi device node if one is available.
     ///
     /// If no device is available you will need to run Device::add() with superuser permissions.
-    #[instrument]
     pub fn get() -> Option<Self> {
         if let Ok(mut devices) = Self::list_available() {
             devices.pop()
@@ -36,7 +35,6 @@ impl DeviceNode {
     }
 
     /// Check if a device node is an evdi device node, is a different device node, or doesn't exist.
-    #[instrument]
     pub fn status(&self) -> DeviceNodeStatus {
         let sys = unsafe { evdi_check_device(self.id) };
         DeviceNodeStatus::from(sys)
@@ -46,7 +44,6 @@ impl DeviceNode {
     ///
     /// Returns None if we fail to open the device, which may be because the device isn't an evdi
     /// device node.
-    #[instrument]
     pub fn open(&self) -> Result<UnconnectedHandle, OpenDeviceError> {
         // NOTE: Opening invalid devices can be very slow (~10sec on my laptop), so we check first
         match self.status() {
@@ -55,6 +52,7 @@ impl DeviceNode {
             DeviceNodeStatus::Available => {
                 let sys = unsafe { evdi_open(self.id) };
                 if !sys.is_null() {
+                    info!("Opened device {}", self.id);
                     Ok(UnconnectedHandle::new(sys))
                 } else {
                     Err(OpenDeviceError::Unknown)

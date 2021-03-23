@@ -1,18 +1,18 @@
 //! Performs most operations
 
 use std::collections::HashMap;
+use std::io;
 use std::mem::forget;
 use std::os::raw::{c_int, c_uint, c_void};
 use std::time::Duration;
 
 use evdi_sys::*;
 use thiserror::Error;
-use tokio::io::unix::AsyncFd;
-use tokio::sync::watch;
-use tokio::time;
-use tracing::{error, instrument, span, Level};
+use tokio::sync::mpsc;
 
+use crate::events::AwaitEventError;
 use crate::prelude::*;
+use derivative::Derivative;
 
 /// Represents a handle that is open but not connected.
 #[derive(Debug)]
@@ -21,35 +21,27 @@ pub struct UnconnectedHandle {
 }
 
 impl UnconnectedHandle {
-    /// Connect to an handle and block until ready.
+    /// Connect to an handle and wait until ready.
     ///
     /// ```
     /// # use evdi::prelude::*;
     /// # use std::time::Duration;
-    /// use evdi::handle::PollReadyError;
+    /// use evdi::handle::HandleConnectError;
     /// # tokio_test::block_on(async {
     /// let device: DeviceNode = DeviceNode::get().unwrap();
     /// let handle = device
     ///     .open().unwrap()
-    ///     .connect(&DeviceConfig::sample(), Duration::from_secs(1))
-    ///     .await?;
-    /// # Ok::<(), PollReadyError>(())
+    ///     .connect(&DeviceConfig::sample());
+    /// # Ok::<(), HandleConnectError>(())
     /// # });
     /// ```
     #[instrument]
-    pub async fn connect(
-        self,
-        config: &DeviceConfig,
-        ready_timeout: Duration,
-    ) -> Result<Handle, PollReadyError> {
+    pub fn connect(self, config: &DeviceConfig) -> Handle {
         // NOTE: We deliberately take ownership to ensure a handle is connected at most once.
 
-        let config: DeviceConfig = config.to_owned();
         let edid = Box::leak(Box::new(config.edid()));
 
         {
-            let span = span!(Level::TRACE, "evdi_connect", handle = ?self.handle);
-            let _enter = span.enter();
             unsafe {
                 evdi_connect(
                     self.handle,
@@ -58,6 +50,7 @@ impl UnconnectedHandle {
                     config.sku_area_limit(),
                 );
             }
+            info!("evdi_connect")
         }
 
         let sys = self.handle;
@@ -66,37 +59,7 @@ impl UnconnectedHandle {
         // Since we are stack-allocated we still get cleaned up
         forget(self);
 
-        let handle = Handle::new(sys, config);
-
-        let raw_fd = {
-            let span = span!(
-                Level::TRACE,
-                "evdi_get_event_ready",
-                handle = handle.sys as usize,
-            );
-            let _enter = span.enter();
-            unsafe { evdi_get_event_ready(handle.sys) }
-        };
-
-        let fd = AsyncFd::new(raw_fd)?;
-
-        Self::await_fd_readable(fd, ready_timeout).await?;
-
-        Ok(handle)
-    }
-
-    #[instrument]
-    async fn await_fd_readable(fd: AsyncFd<i32>, timeout: Duration) -> Result<(), PollReadyError> {
-        tokio::select! {
-            guard = fd.readable() => {
-                guard?.retain_ready();
-                Ok(())
-            },
-            _ = tokio::time::sleep(timeout) => {
-                error!(?fd, ?timeout, "await_fd_readable_timeout");
-                Err(PollReadyError::Timeout)
-            },
-        }
+        Handle::new(sys, config)
     }
 
     pub(crate) fn new(handle: evdi_handle) -> Self {
@@ -111,15 +74,16 @@ impl Drop for UnconnectedHandle {
 }
 
 #[derive(Debug, Error)]
-pub enum PollReadyError {
-    #[error("IO")]
+pub enum HandleConnectError {
+    #[error("IO error opening ready file descriptor")]
     Io(#[from] std::io::Error),
     #[error("Timeout")]
     Timeout,
 }
 
 /// Represents an evdi handle that is connected and ready.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct Handle {
     sys: evdi_handle,
     device_config: DeviceConfig,
@@ -132,25 +96,19 @@ pub struct Handle {
     /// # tokio_test::block_on(async {
     /// # let device: DeviceNode = DeviceNode::get().unwrap();
     /// # let timeout = Duration::from_secs(1);
-    /// # let mut handle = device.open().unwrap()
-    /// #   .connect(&DeviceConfig::sample(), timeout).await.unwrap();
-    /// #
+    /// # let mut handle = device.open()?.connect(&DeviceConfig::sample());
     /// // Initially events will be None
-    /// {
-    ///     let mode = handle.events.mode.borrow();
-    ///     assert!(mode.is_none());
-    /// }
+    /// let mode = handle.events.current_mode();
+    /// assert!(mode.is_none());
     ///
-    /// handle.dispatch_events();
-    ///
-    /// // Wait until we get a mode
-    /// handle.events.mode.changed().await;
-    ///
-    /// let mode = handle.events.mode.borrow();
-    /// assert!(mode.is_some());
+    /// // Wait for a mode
+    /// let mode: Mode = handle.events.await_mode(timeout).await?;
+    /// # Ok::<_, Box<dyn std::error::Error>>(())
     /// # });
     /// ```
     pub events: HandleEvents,
+    #[derivative(Debug = "ignore")]
+    close_event_handler: crossbeam_channel::Sender<()>,
 }
 
 impl Handle {
@@ -191,10 +149,8 @@ impl Handle {
     /// # tokio_test::block_on(async {
     /// # let timeout = Duration::from_secs(1);
     /// # let mut handle = DeviceNode::get().unwrap().open()?
-    /// #     .connect(&DeviceConfig::sample(), timeout).await?;
-    /// # handle.dispatch_events();
-    /// # handle.events.mode.changed().await;
-    /// # let mode = handle.events.mode.borrow().unwrap();
+    /// #     .connect(&DeviceConfig::sample());
+    /// # let mode = handle.events.await_mode(timeout).await.unwrap();
     /// let buf_id = handle.new_buffer(&mode);
     /// handle.request_update(buf_id, timeout).await?;
     /// let buf_data = handle.get_buffer(buf_id).expect("Buffer exists");
@@ -215,7 +171,6 @@ impl Handle {
         //
         //  We need to take &mut buffer to ensure the buffer can't be read from while it's being
         //  updated.
-        let user_data_sys = self as *const Handle;
         let handle_sys = self.sys;
 
         let buffer = self
@@ -224,18 +179,17 @@ impl Handle {
             .ok_or(RequestUpdateError::UnregisteredBuffer)?;
 
         let ready = unsafe {
-            let span = span!(Level::TRACE, "evdi_request_update", handle = ?handle_sys, ?buffer_id);
+            let span = span!(Level::INFO, "evdi_request_update", handle = ?handle_sys, ?buffer_id);
             let _enter = span.enter();
             evdi_request_update(handle_sys, buffer_id.sys())
         };
 
         if !ready {
-            Self::dispatch_events_sys(user_data_sys, handle_sys);
-            Self::await_buffer_update_ready(buffer, timeout).await?;
+            self.events.await_buffer_update(buffer_id, timeout).await?;
         }
 
         unsafe {
-            let span = span!(Level::TRACE, "evdi_grab_pixels", handle = ?handle_sys, ?buffer_id);
+            let span = span!(Level::INFO, "evdi_grab_pixels", handle = ?handle_sys, ?buffer_id);
             let _enter = span.enter();
             evdi_grab_pixels(
                 handle_sys as *mut evdi_device_context,
@@ -250,53 +204,130 @@ impl Handle {
     }
 
     #[instrument]
-    async fn await_buffer_update_ready(
-        buffer: &mut Buffer,
-        timeout: Duration,
-    ) -> Result<(), RequestUpdateError> {
-        tokio::select! {
-            resp = buffer.update_ready.recv() => {
-                resp.expect("Buffer update channel must not be closed");
-                Ok(())
-            }
-            _ = time::sleep(timeout) => {
-                error!(?buffer, ?timeout, "await_buffer_update_ready timed out");
-                Err(RequestUpdateError::Timeout)
-            }
-        }
-    }
-
-    #[instrument]
     pub fn enable_cursor_events(&self, enable: bool) {
         unsafe {
             evdi_enable_cursor_events(self.sys, enable);
         }
     }
 
-    /// Dispatch events received from the kernel module to the channels in [`Handle::events`].
-    ///
-    /// If you want to receive events in [`Handle::events`] you must call this in some sort of loop.
-    ///
-    /// Note: [`Handle::request_update`] happens to be implemented in such a way that it causes
-    /// events available at the time it is called to be dispatched. Users should not rely on this.
-    pub fn dispatch_events(&self) {
-        Self::dispatch_events_sys(self as *const Handle, self.sys);
-    }
+    fn spawn_event_handler(
+        handle_sys: evdi_handle,
+        close_recv: crossbeam_channel::Receiver<()>,
+        event_tx: mpsc::Sender<Event>,
+        ready_fd: i32,
+    ) {
+        struct TransferWrapper(evdi_handle);
+        // Safety: The intended usage seems to be to run this in another thread, so I think this
+        //  is ok.
+        unsafe impl Send for TransferWrapper {}
+        unsafe impl Sync for TransferWrapper {}
+        let handle_sys = TransferWrapper(handle_sys);
 
-    #[instrument]
-    fn dispatch_events_sys(user_data: *const Handle, handle: evdi_handle) {
-        let mut ctx = evdi_event_context {
-            dpms_handler: None,
-            mode_changed_handler: Some(Self::mode_changed_handler_caller),
-            update_ready_handler: Some(Self::update_ready_handler_caller),
-            crtc_state_handler: None,
-            cursor_set_handler: None,
-            cursor_move_handler: None,
-            ddcci_data_handler: None,
-            // Safety: We cast to a mut pointer, but we never cast back to a mut reference
-            user_data: user_data as *mut c_void,
-        };
-        unsafe { evdi_handle_events(handle, &mut ctx) };
+        /// Safety: tx was constructed from Box::leak
+        fn send_event(tx: *mut c_void, event: Event) {
+            let tx = unsafe {
+                (tx as *mut mpsc::Sender<Event>)
+                    .as_ref()
+                    .expect("We never set user_data to nullptr")
+            };
+
+            debug!(?event, "Sending event");
+            if let Err(err) = tx.blocking_send(event) {
+                warn!(?err, ?tx, "Tried to send event but no receivers");
+            };
+        }
+
+        extern "C" fn h_mode_changed(mode: evdi_mode, tx: *mut c_void) {
+            send_event(tx, Event::ModeChanged(mode.into()));
+        }
+        extern "C" fn h_dpms(dpms_mode: c_int, tx: *mut c_void) {
+            send_event(tx, Event::DpmsModeChanged(dpms_mode.into()));
+        }
+        extern "C" fn h_update_ready(buf: c_int, tx: *mut c_void) {
+            send_event(tx, Event::UpdateReady(buf.into()));
+        }
+        extern "C" fn h_crtc_state(state: c_int, tx: *mut c_void) {
+            send_event(tx, Event::CrtcStateChanged(state.into()));
+        }
+        extern "C" fn h_cursor_set(cursor_set: evdi_cursor_set, tx: *mut c_void) {
+            send_event(tx, Event::CursorChange(cursor_set.into()));
+        }
+        extern "C" fn h_cursor_move(cursor_move: evdi_cursor_move, tx: *mut c_void) {
+            send_event(tx, Event::CursorMove(cursor_move.into()));
+        }
+        extern "C" fn h_ddci_data(data: evdi_ddcci_data, tx: *mut c_void) {
+            send_event(tx, Event::I2CRequest(data.into()));
+        }
+
+        tokio::task::spawn_blocking(move || {
+            let event_tx = Box::leak(Box::new(event_tx));
+
+            let mut pollfd = libc::pollfd {
+                fd: ready_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+
+            loop {
+                match close_recv.try_recv() {
+                    Ok(()) | Err(crossbeam_channel::TryRecvError::Disconnected) => break,
+                    Err(crossbeam_channel::TryRecvError::Empty) => {}
+                }
+
+                unsafe {
+                    let ret = libc::poll(&mut pollfd, 1, 100);
+                    if ret < 0 {
+                        let err = io::Error::last_os_error();
+                        error!("Error polling: {:?}", err);
+                        continue;
+                    }
+                }
+
+                match pollfd.revents {
+                    libc::POLLHUP => {
+                        warn!("POLLHUP");
+                        break;
+                    }
+                    libc::POLLNVAL => {
+                        warn!("POLLNVAL");
+                        break;
+                    }
+                    libc::POLLERR => {
+                        warn!("POLLERR");
+                        break;
+                    }
+                    0 => {
+                        // Timeout, just check if we should close
+                        continue;
+                    }
+                    libc::POLLIN => {
+                        // Pass through to handle events
+                    }
+                    revent => {
+                        error!(revent, "Unexpected revent");
+                        continue;
+                    }
+                }
+
+                let mut ctx = evdi_event_context {
+                    dpms_handler: Some(h_dpms),
+                    mode_changed_handler: Some(h_mode_changed),
+                    update_ready_handler: Some(h_update_ready),
+                    crtc_state_handler: Some(h_crtc_state),
+                    cursor_set_handler: Some(h_cursor_set),
+                    cursor_move_handler: Some(h_cursor_move),
+                    ddcci_data_handler: Some(h_ddci_data),
+                    // Safety: We cast to a mut pointer, but we never cast back to a mut reference
+                    user_data: event_tx as *mut mpsc::Sender<_> as *mut _,
+                };
+
+                unsafe { evdi_handle_events(handle_sys.0, &mut ctx) };
+            }
+
+            unsafe {
+                drop(Box::from_raw(event_tx));
+            }
+        });
     }
 
     /// Disconnect the handle.
@@ -316,71 +347,47 @@ impl Handle {
         UnconnectedHandle::new(sys)
     }
 
-    extern "C" fn mode_changed_handler_caller(mode: evdi_mode, user_data: *mut c_void) {
-        let handle = unsafe { Self::handle_from_user_data(user_data) };
+    /// Takes a handle that has just been connected
+    fn new(handle_sys: evdi_handle, device_config: &DeviceConfig) -> Self {
+        let (close_event_handler, close_recv) = crossbeam_channel::bounded(1);
+        let (event_tx, event_recv) = mpsc::channel(16);
 
-        let span = span!(
-            Level::TRACE,
-            "mode_changed_handler_caller",
-            ?mode,
-            ?user_data,
-            handle = ?handle.sys,
-        );
-        let _enter = span.enter();
+        let ready_fd = unsafe { evdi_get_event_ready(handle_sys) };
 
-        if let Err(err) = handle.events.mode_sender.send(Some(mode.into())) {
-            eprintln!(
-                "Dropping msg. Mode change receiver closed, but callback called: {:?}",
-                err
-            );
-        }
-    }
+        Self::spawn_event_handler(handle_sys, close_recv, event_tx, ready_fd);
 
-    extern "C" fn update_ready_handler_caller(buf: c_int, user_data: *mut c_void) {
-        let handle = unsafe { Self::handle_from_user_data(user_data) };
+        // select! {
+        //     _ = sleep(Duration::from_millis(100)) => {
+        //     // _ = sleep(ready_timeout) => {
+        //         error!("Timed out waiting for handle ready");
+        //         return Err(HandleConnect::Timeout);
+        //     }
+        //     _guard = ready_fd.readable()
+        //         .instrument(span!(Level::INFO, "handle ready")) => {}
+        // }
 
-        let span = span!(Level::TRACE, "update_ready_handler_caller", buf, ?user_data, handle = ?handle.sys);
-        let _enter = span.enter();
-
-        let id = BufferId::new(buf);
-        let buf = handle.buffers.get(&id);
-
-        if let Some(buf) = buf {
-            if buf.send_update_ready.send(()).is_err() {
-                error!("Dropping msg. Update ready receiver closed, but callback called");
-            }
-        } else {
-            error!("Dropping msg. No update ready channel for buffer, but callback called");
-        }
-    }
-
-    /// Safety: user_data must be a valid reference to a Handle.
-    unsafe fn handle_from_user_data<'b>(user_data: *mut c_void) -> &'b Handle {
-        (user_data as *mut Handle).as_ref().unwrap()
-    }
-
-    /// Takes a handle that has just been connected and polled until ready.
-    fn new(handle_sys: evdi_handle, device_config: DeviceConfig) -> Self {
         Self {
             sys: handle_sys,
-            device_config,
+            device_config: device_config.to_owned(),
             buffers: HashMap::new(),
-            events: HandleEvents::default(),
+            events: HandleEvents::new(event_recv),
+            close_event_handler,
         }
     }
 }
 
 impl Drop for Handle {
     fn drop(&mut self) {
-        unsafe {
-            let span = span!(Level::TRACE, "evdi_disconnect", handle = ?self.sys);
-            let _enter = span.enter();
-            evdi_disconnect(self.sys);
+        if self.close_event_handler.send(()).is_err() {
+            error!(handle = ?self.sys, "Failed to send to close event loop channel");
         }
+
         unsafe {
-            let span = span!(Level::TRACE, "evdi_close", handle = ?self.sys);
-            let _enter = span.enter();
+            evdi_disconnect(self.sys);
+            info!("evdi_disconnect");
+
             evdi_close(self.sys);
+            info!("evdi_close");
         }
     }
 }
@@ -393,24 +400,10 @@ impl PartialEq for Handle {
 
 impl Eq for Handle {}
 
-#[derive(Debug)]
-pub struct HandleEvents {
-    pub mode: watch::Receiver<Option<Mode>>,
-    mode_sender: watch::Sender<Option<Mode>>,
-}
-
-impl Default for HandleEvents {
-    fn default() -> Self {
-        let (mode_sender, mode) = watch::channel(None);
-
-        Self { mode, mode_sender }
-    }
-}
-
-#[derive(Debug, Error, Eq, PartialEq)]
+#[derive(Debug, Error)]
 pub enum RequestUpdateError {
-    #[error("Kernel chose to update async, timeout waiting for response")]
-    Timeout,
+    #[error("Kernel chose to update async, failed to await response")]
+    AwaitUpdate(#[from] AwaitEventError),
     #[error("The buffer provided does not exist or is attached to a different handle")]
     UnregisteredBuffer,
 }
@@ -419,35 +412,25 @@ pub enum RequestUpdateError {
 pub mod tests {
     use std::fs::File;
 
-    use super::*;
     use crate::test_common::*;
+
+    use super::*;
 
     #[ltest(atest)]
     async fn can_connect() {
-        handle_fixture().await;
+        handle_fixture();
     }
 
     #[ltest(atest)]
     async fn can_enable_cursor_events() {
-        handle_fixture().await.enable_cursor_events(true);
-    }
-
-    #[ltest(atest)]
-    async fn can_receive_mode() {
-        let mut handle = handle_fixture().await;
-        handle.dispatch_events();
-        handle.events.mode.changed().await.unwrap();
-        let mode = handle.events.mode.borrow().unwrap();
-        assert!(mode.height > 100);
+        handle_fixture().enable_cursor_events(true);
     }
 
     #[ltest(atest)]
     async fn update_can_be_called_multiple_times() {
-        let mut handle = handle_fixture().await;
+        let mut handle = handle_fixture();
 
-        handle.dispatch_events();
-        handle.events.mode.changed().await.unwrap();
-        let mode = handle.events.mode.borrow().unwrap();
+        let mode = handle.events.await_mode(TIMEOUT).await.unwrap();
 
         let buf_id = handle.new_buffer(&mode);
 
@@ -457,9 +440,7 @@ pub mod tests {
     }
 
     async fn get_update(handle: &mut Handle) -> &Buffer {
-        handle.dispatch_events();
-        handle.events.mode.changed().await.unwrap();
-        let mode = handle.events.mode.borrow().unwrap();
+        let mode = handle.events.await_mode(TIMEOUT).await.unwrap();
         let buf_id = handle.new_buffer(&mode);
 
         // Give us some time to settle
@@ -472,7 +453,7 @@ pub mod tests {
 
     #[ltest(atest)]
     async fn bytes_is_non_empty() {
-        let mut handle = handle_fixture().await;
+        let mut handle = handle_fixture();
         let buf = get_update(&mut handle).await;
 
         let mut total: u32 = 0;
@@ -493,7 +474,7 @@ pub mod tests {
 
     #[ltest(atest)]
     async fn can_output_debug() {
-        let mut handle = handle_fixture().await;
+        let mut handle = handle_fixture();
         let buf = get_update(&mut handle).await;
 
         let mut f = File::create("TEMP_debug_rect.pnm").unwrap();
@@ -503,27 +484,25 @@ pub mod tests {
 
     #[ltest(atest)]
     async fn can_disconnect() {
-        let mut handle = handle_fixture().await;
+        let mut handle = handle_fixture();
 
         for _ in 0..10 {
             let unconnected = handle.disconnect();
-            handle = unconnected
-                .connect(&DeviceConfig::sample(), TIMEOUT)
-                .await
-                .unwrap();
+            handle = unconnected.connect(&DeviceConfig::sample())
         }
     }
 
     #[ltest(atest)]
     async fn cannot_get_buffer_after_unregister() {
-        let mut handle = handle_fixture().await;
-        handle.dispatch_events();
-        handle.events.mode.changed().await.unwrap();
-        let mode = handle.events.mode.borrow().unwrap();
+        let mut handle = handle_fixture();
+        let mode = handle.events.await_mode(TIMEOUT).await.unwrap();
 
         let buf = handle.new_buffer(&mode);
         handle.unregister_buffer(buf);
         let res = handle.request_update(buf, TIMEOUT).await;
-        assert_eq!(res.unwrap_err(), RequestUpdateError::UnregisteredBuffer);
+        assert!(matches!(
+            res.unwrap_err(),
+            RequestUpdateError::UnregisteredBuffer
+        ));
     }
 }
