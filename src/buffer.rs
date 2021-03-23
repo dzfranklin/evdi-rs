@@ -12,6 +12,7 @@ use evdi_sys::*;
 use rand::Rng;
 
 use crate::prelude::*;
+use crate::PreallocatedArray;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct BufferId(i32);
@@ -75,8 +76,7 @@ pub struct Buffer {
     pub(crate) id: BufferId,
     #[derivative(Debug = "ignore")]
     buffer: Box<[u8]>,
-    rects: Box<[evdi_rect]>,
-    num_rects: i32,
+    pub(crate) rects: PreallocatedArray<evdi_rect>,
     pub width: usize,
     pub height: usize,
     pub stride: usize,
@@ -119,7 +119,7 @@ impl Buffer {
     }
 
     pub fn rects(&self) -> &[evdi_rect] {
-        &self.rects[0..self.num_rects as usize]
+        self.rects.as_ref()
     }
 
     /// Write the pixels to a file in the unoptimized image format [PPM].
@@ -165,23 +165,15 @@ impl Buffer {
         Ok(())
     }
 
-    pub(crate) fn rects_ptr_sys(&self) -> *mut evdi_rect {
-        self.rects.as_ptr() as *mut evdi_rect
-    }
-
-    pub(crate) fn rects_count_ptr_sys(&self) -> *mut c_int {
-        &self.num_rects as *const _ as *mut c_int
-    }
-
-    pub(crate) fn sys(&self) -> evdi_buffer {
+    pub(crate) fn sys(&mut self) -> evdi_buffer {
         evdi_buffer {
             id: self.id.0,
             buffer: self.buffer.as_ptr() as *mut c_void,
             width: self.width as c_int,
             height: self.height as c_int,
             stride: self.stride as c_int,
-            rects: self.rects_ptr_sys() as *mut evdi_rect,
-            rect_count: self.num_rects,
+            rects: self.rects.data_ptr_mut(),
+            rect_count: self.rects.len_ptr_mut() as _,
         }
     }
 
@@ -217,8 +209,7 @@ impl Buffer {
             version: None,
             id: BufferId::generate(),
             buffer,
-            rects,
-            num_rects: 0,
+            rects: PreallocatedArray::new(rects, 0),
             width,
             height,
             stride,

@@ -266,6 +266,46 @@ impl LibVersion {
     }
 }
 
+/// An array allocated as a specific size, of which only part is populated.
+pub(crate) struct PreallocatedArray<T> {
+    data: Box<[T]>,
+    len: usize,
+    max_len: usize,
+}
+
+impl<T> AsRef<[T]> for PreallocatedArray<T> {
+    fn as_ref(&self) -> &[T] {
+        if self.len > self.max_len {
+            panic!(
+                "SizedArray has length {}, but was allocated with length {}",
+                self.len, self.max_len
+            );
+        }
+        &self.data[0..self.len]
+    }
+}
+
+impl<T> PreallocatedArray<T> {
+    pub(crate) fn new(data: Box<[T]>, len: usize) -> Self {
+        let max_len = data.len();
+        Self { data, len, max_len }
+    }
+
+    pub(crate) fn data_ptr_mut(&mut self) -> *mut T {
+        self.data.as_mut_ptr()
+    }
+
+    pub(crate) fn len_ptr_mut(&mut self) -> *mut usize {
+        &mut self.len as _
+    }
+}
+
+impl<T: Debug> Debug for PreallocatedArray<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.as_ref()).finish()
+    }
+}
+
 pub(crate) struct OwnedLibcArray<T> {
     ptr: *const T,
     len: usize,

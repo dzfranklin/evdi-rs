@@ -117,7 +117,7 @@ impl Handle {
     /// You are responsible for re-creating buffers if the mode changes.
     #[instrument]
     pub fn new_buffer(&mut self, mode: &Mode) -> BufferId {
-        let buffer = Buffer::new(mode);
+        let mut buffer = Buffer::new(mode);
         let id = buffer.id;
         unsafe { evdi_register_buffer(self.sys, buffer.sys()) };
         self.buffers.insert(id, buffer);
@@ -193,8 +193,8 @@ impl Handle {
             let _enter = span.enter();
             evdi_grab_pixels(
                 handle_sys as *mut evdi_device_context,
-                buffer.rects_ptr_sys(),
-                buffer.rects_count_ptr_sys(),
+                buffer.rects.data_ptr_mut(),
+                buffer.rects.len_ptr_mut() as _,
             )
         }
 
