@@ -73,7 +73,7 @@ pub struct Buffer {
     /// # });
     /// ```
     pub version: Option<u32>,
-    pub(crate) id: BufferId,
+    pub id: BufferId,
     #[derivative(Debug = "ignore")]
     buffer: Box<[u8]>,
     pub(crate) rects: PreallocatedArray<evdi_rect>,
