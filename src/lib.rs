@@ -27,7 +27,8 @@
 //! const UPDATE_BUFFER_TIMEOUT: Duration = Duration::from_millis(20);
 //!
 //! # tokio_test::block_on(async {
-//! // If get returns None you need to call DeviceNode::add with superuser permissions.
+//! // If get returns None you need to call DeviceNode::add with superuser permissions or setup the
+//! // kernel module to create a device on module load.
 //! let device = DeviceNode::get().unwrap();
 //!
 //! // Replace this with the details of the display you want to emulate
@@ -76,6 +77,10 @@
 //!
 //! You will probably want to create your own seperate binaries that manage device nodes so that
 //! your users don't need to run your main binary with superuser permissions.
+//!
+//! Another alternative is [configuring the kernel module] to create devices when it loads.
+//!
+//! [module-params]: https://displaylink.github.io/evdi/details/#module-parameters
 
 use std::ffi::CStr;
 use std::fmt;
@@ -105,6 +110,9 @@ pub mod prelude;
 mod test_common;
 
 /// Check the status of the evdi kernel module for compatibility with this library version.
+///
+/// This is provided so that you can show a helpful error message early. [`DeviceNode::open`] will
+/// perform this check for you.
 ///
 /// ```
 /// # use evdi::prelude::*;
