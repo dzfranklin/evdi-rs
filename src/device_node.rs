@@ -51,6 +51,13 @@ impl DeviceNode {
     pub fn open(&self) -> Result<UnconnectedHandle, OpenDeviceError> {
         ensure_logs_setup();
 
+        // Provide helpful info if the call would have failed with Unknown
+        match check_kernel_mod() {
+            KernelModStatus::NotInstalled => return Err(OpenDeviceError::KernelModuleNotInstalled),
+            KernelModStatus::Outdated => return Err(OpenDeviceError::KernelModuleOutdated),
+            KernelModStatus::Compatible => (),
+        }
+
         // NOTE: Opening invalid devices can be very slow (~10sec on my laptop), so we check first
         match self.status() {
             DeviceNodeStatus::Unrecognized => Err(OpenDeviceError::NotEvdiDevice),
@@ -150,6 +157,10 @@ pub enum DeviceNodeStatus {
 
 #[derive(Debug, Error)]
 pub enum OpenDeviceError {
+    #[error("The kernel module evdi is not installed")]
+    KernelModuleNotInstalled,
+    #[error("The kernel module is too outdated to use with this library version")]
+    KernelModuleOutdated,
     #[error("The device node does not exist")]
     NonexistentDevice,
     #[error("The device node is not an evdi device node")]
