@@ -8,11 +8,10 @@ use std::os::raw::{c_int, c_void};
 
 use derivative::Derivative;
 use drm_fourcc::UnrecognizedFourcc;
-use evdi_sys::*;
 use rand::Rng;
 
 use crate::prelude::*;
-use crate::PreallocatedArray;
+use crate::{ffi, PreallocatedArray};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct BufferId(i32);
@@ -76,7 +75,7 @@ pub struct Buffer {
     pub id: BufferId,
     #[derivative(Debug = "ignore")]
     buffer: Box<[u8]>,
-    pub(crate) rects: PreallocatedArray<evdi_rect>,
+    pub(crate) rects: PreallocatedArray<ffi::evdi_rect>,
     pub width: usize,
     pub height: usize,
     pub stride: usize,
@@ -118,7 +117,7 @@ impl Buffer {
         self.buffer.as_ref()
     }
 
-    pub fn rects(&self) -> &[evdi_rect] {
+    pub fn rects(&self) -> &[ffi::evdi_rect] {
         self.rects.as_ref()
     }
 
@@ -165,8 +164,8 @@ impl Buffer {
         Ok(())
     }
 
-    pub(crate) fn sys(&mut self) -> evdi_buffer {
-        evdi_buffer {
+    pub(crate) fn sys(&mut self) -> ffi::evdi_buffer {
+        ffi::evdi_buffer {
             id: self.id.0,
             buffer: self.buffer.as_ptr() as *mut c_void,
             width: self.width as c_int,
@@ -195,7 +194,7 @@ impl Buffer {
         // NOTE: We use a boxed slice to prevent accidental re-allocation
         let buffer = vec![0u8; height * stride].into_boxed_slice();
         let rects = vec![
-            evdi_rect {
+            ffi::evdi_rect {
                 x1: 0,
                 y1: 0,
                 x2: 0,

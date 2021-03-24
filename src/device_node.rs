@@ -5,12 +5,12 @@ use std::io::Write;
 use std::os::raw::c_uint;
 use std::{fs, io};
 
-use evdi_sys::*;
 use lazy_static::lazy_static;
 use regex::Regex;
 use thiserror::Error;
 use tracing::instrument;
 
+use crate::ffi;
 use crate::prelude::*;
 
 const DEVICE_CARDS_DIR: &str = "/dev/dri";
@@ -36,7 +36,7 @@ impl DeviceNode {
 
     /// Check if a device node is an evdi device node, is a different device node, or doesn't exist.
     pub fn status(&self) -> DeviceNodeStatus {
-        let sys = unsafe { evdi_check_device(self.id) };
+        let sys = unsafe { ffi::evdi_check_device(self.id) };
         DeviceNodeStatus::from(sys)
     }
 
@@ -50,7 +50,7 @@ impl DeviceNode {
             DeviceNodeStatus::Unrecognized => Err(OpenDeviceError::NotEvdiDevice),
             DeviceNodeStatus::NotPresent => Err(OpenDeviceError::NonexistentDevice),
             DeviceNodeStatus::Available => {
-                let sys = unsafe { evdi_open(self.id) };
+                let sys = unsafe { ffi::evdi_open(self.id) };
                 if !sys.is_null() {
                     info!("Opened device {}", self.id);
                     Ok(UnconnectedHandle::new(sys))
@@ -98,7 +98,7 @@ impl DeviceNode {
     /// **Requires superuser permissions.**
     #[instrument]
     pub fn add() -> bool {
-        let status = unsafe { evdi_add_device() };
+        let status = unsafe { ffi::evdi_add_device() };
         status > 0
     }
 
@@ -157,9 +157,9 @@ impl DeviceNodeStatus {
     /// Panics on unrecognized sys.
     fn from(sys: c_uint) -> Self {
         match sys {
-            EVDI_STATUS_AVAILABLE => DeviceNodeStatus::Available,
-            EVDI_STATUS_UNRECOGNIZED => DeviceNodeStatus::Unrecognized,
-            EVDI_STATUS_NOT_PRESENT => DeviceNodeStatus::NotPresent,
+            ffi::EVDI_STATUS_AVAILABLE => DeviceNodeStatus::Available,
+            ffi::EVDI_STATUS_UNRECOGNIZED => DeviceNodeStatus::Unrecognized,
+            ffi::EVDI_STATUS_NOT_PRESENT => DeviceNodeStatus::NotPresent,
             _ => panic!("Invalid device status {}", sys),
         }
     }

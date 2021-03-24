@@ -90,7 +90,6 @@ use std::os::raw::{c_char, c_void};
 
 pub use drm_fourcc::DrmFormat;
 pub use evdi_sys as ffi;
-use evdi_sys::*;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::fmt::{Debug, Formatter};
@@ -160,7 +159,7 @@ static LOGS_SETUP: Once = Once::new();
 /// Calling this function multiple times has no effect.
 pub fn ensure_logs_setup() {
     LOGS_SETUP.call_once(|| unsafe {
-        wrapper_evdi_set_logging(wrapper_log_cb {
+        ffi::wrapper_evdi_set_logging(ffi::wrapper_log_cb {
             function: Some(logging_cb_caller),
             user_data: null_mut(),
         });
@@ -227,19 +226,19 @@ impl LibVersion {
     #[instrument]
     pub fn get() -> Self {
         let sys = unsafe {
-            let mut out = evdi_lib_version {
+            let mut out = ffi::evdi_lib_version {
                 version_major: -1,
                 version_minor: -1,
                 version_patchlevel: -1,
             };
-            evdi_get_lib_version(&mut out);
+            ffi::evdi_get_lib_version(&mut out);
             out
         };
 
         let version = Self::new(
             &sys,
-            EVDI_MODULE_COMPATIBILITY_VERSION_MAJOR,
-            EVDI_MODULE_COMPATIBILITY_VERSION_MINOR,
+            ffi::EVDI_MODULE_COMPATIBILITY_VERSION_MAJOR,
+            ffi::EVDI_MODULE_COMPATIBILITY_VERSION_MINOR,
         );
 
         // Ensure the struct was actually populated
@@ -255,7 +254,11 @@ impl LibVersion {
         other.major == self.compatible_mod_major && other.minor >= self.compatible_mod_minor
     }
 
-    fn new(sys: &evdi_lib_version, compatible_mod_major: u32, compatible_mod_minor: u32) -> Self {
+    fn new(
+        sys: &ffi::evdi_lib_version,
+        compatible_mod_major: u32,
+        compatible_mod_minor: u32,
+    ) -> Self {
         Self {
             major: sys.version_major,
             minor: sys.version_minor,

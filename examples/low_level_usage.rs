@@ -5,8 +5,6 @@ use std::os::raw::{c_int, c_uint};
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-use evdi_sys::{evdi_close, evdi_disconnect, evdi_handle};
-
 use evdi::ffi;
 use evdi::prelude::DeviceConfig;
 use std::{io, thread};
@@ -38,7 +36,7 @@ extern "C" fn update_ready_handler(_buffer_id: c_int, handle: *mut c_void) {
     ]
     .into_boxed_slice();
     unsafe {
-        ffi::evdi_grab_pixels(handle as evdi_handle, rects.as_mut_ptr(), &mut 0);
+        ffi::evdi_grab_pixels(handle as ffi::evdi_handle, rects.as_mut_ptr(), &mut 0);
     }
 }
 
@@ -105,8 +103,8 @@ fn main() {
             thread::sleep(Duration::from_millis(1000 / 60));
         }
 
-        evdi_disconnect(handle.as_ptr());
-        evdi_close(handle.as_ptr());
+        ffi::evdi_disconnect(handle.as_ptr());
+        ffi::evdi_close(handle.as_ptr());
     }
 }
 
