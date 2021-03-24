@@ -10,7 +10,7 @@ use evdi_sys::*;
 use thiserror::Error;
 use tokio::sync::mpsc;
 
-use crate::events::AwaitEventError;
+use crate::events::{AwaitEventError, Event};
 use crate::prelude::*;
 use derivative::Derivative;
 

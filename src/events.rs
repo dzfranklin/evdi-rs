@@ -139,24 +139,14 @@ pub enum AwaitEventError {
 }
 
 #[derive(Clone, Debug)]
-pub enum Event {
-    /// A DPMS mode has changed, such as the display suspending or turning off.
+pub(crate) enum Event {
     DpmsModeChanged(DpmsMode),
-    /// A display mode has changed.
     ModeChanged(Mode),
     /// An update for a buffer requested earlier is ready to be consumed.
     UpdateReady(BufferId),
-    /// When DRM's CRTC changes state
     CrtcStateChanged(CrtcState),
-    /// This notification is sent for an update of cursor buffer or shape. It is also raised when
-    /// cursor is enabled or disabled (when cursor is moved on and off the screen).
     CursorChange(CursorChange),
-    /// A cursor position change. Raised only when cursor is positioned on virtual screen.
     CursorMove(CursorMove),
-    /// An i2c request has been made to the DDC/CI address (0x37).
-    //
-    // The kernel module will wait for a maximum of DDCCI_TIMEOUT_MS (50ms - The default DDC request
-    // timeout) for a response to this request to be passed back via evdi_ddcci_response.
     I2CRequest(DdcCiData),
 }
 
@@ -215,6 +205,8 @@ impl From<c_int> for CrtcState {
     }
 }
 
+/// This notification is sent for an update of cursor buffer or shape. It is also raised when
+/// cursor is enabled or disabled (when cursor is moved on and off the screen).
 #[derive(Debug, Clone)]
 pub struct CursorChange {
     pub enabled: bool,
@@ -250,6 +242,7 @@ impl CursorChange {
     }
 }
 
+/// A cursor position change. Raised only when cursor is positioned on virtual screen.
 #[derive(Debug, Copy, Clone)]
 pub struct CursorMove {
     pub x: i32,
@@ -262,6 +255,10 @@ impl From<ffi::evdi_cursor_move> for CursorMove {
     }
 }
 
+/// An i2c request has been made to the DDC/CI address (0x37).
+//
+// The kernel module will wait for a maximum of DDCCI_TIMEOUT_MS (50ms - The default DDC request
+// timeout) for a response to this request to be passed back via evdi_ddcci_response.
 #[derive(Debug, Clone)]
 pub struct DdcCiData {
     flags: u16,
