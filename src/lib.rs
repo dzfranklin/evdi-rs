@@ -350,31 +350,6 @@ mod tests {
     use crate::prelude::*;
     use crate::test_common::*;
     use crate::*;
-    use logtest::Record;
-    use tracing::log::Level;
-
-    #[test]
-    fn logs_correctly() {
-        use logtest::Logger;
-        let logger = Logger::start();
-
-        ensure_logs_setup();
-
-        DeviceNode::get().unwrap().open().unwrap(); // Generate some log msgs
-
-        let records: Vec<Record> = logger
-            .into_iter()
-            .filter(|r| r.args().starts_with("libevdi"))
-            .collect();
-
-        assert!(records.len() > 2);
-
-        for record in records {
-            assert_eq!(record.level(), Level::Info);
-            assert!(record.args().contains(" libevdi_unknown_level=true "));
-            assert!(record.args().contains(" wraps="));
-        }
-    }
 
     #[ltest]
     fn get_lib_version_works() {
