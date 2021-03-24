@@ -6,8 +6,8 @@
 //! virtual displays on linux.
 //!
 //! ## Tracing and logging
-//! This library emits many [tracing](https://tracing.rs) events. You need to call [`setup_logs`] if
-//! you want to receive logs from the wrapped library instead of having them written to stdout.
+//! This library emits many [tracing](https://tracing.rs) events. Logs by libevdi are
+//! converted to INFO-level tracing events.
 //!
 //! ## Not thread safe
 //! Evdi is not thread safe, and you cannot block the thread it runs for too long as your real and
@@ -15,10 +15,6 @@
 //!
 //! ## Alpha quality
 //! This library is alpha quality. If your display starts behaving weirdly, rebooting may help.
-//!
-//! The underlying library this wraps handles most errors by logging a message and continuing.
-//! This wrapper only adds error information when doing so is easy. Normal usage of this api may
-//! lead to silent failures or crashes.
 //!
 //! ## Basic usage
 //!
@@ -148,32 +144,21 @@ pub enum KernelModStatus {
 
 static LOGS_SETUP: Once = Once::new();
 
-/// Configure the wrapped library to output log records instead of outputting to stdout.
-///
-/// If a [tracing collector](https://tracing.rs) is setup logs will be sent there, otherwise
-/// [log records](https://docs.rs/log/0.4.6/log/) will be emitted.
-///
-/// The wrapped library doesn't distinguish different types of logs, so both information and error
-/// messages will be logged as `info`.
+/// Configure libevdi to emit tracing events instead of writing to stdout.
 ///
 /// Calling this function multiple times has no effect.
-pub fn ensure_logs_setup() {
+pub(crate) fn ensure_logs_setup() {
     LOGS_SETUP.call_once(|| unsafe {
         ffi::wrapper_evdi_set_logging(ffi::wrapper_log_cb {
-            function: Some(logging_cb_caller),
+            function: Some(logs_cb),
             user_data: null_mut(),
         });
     });
 }
 
-extern "C" fn logging_cb_caller(_user_data: *mut c_void, msg: *const c_char) {
+extern "C" fn logs_cb(_user_data: *mut c_void, msg: *const c_char) {
     let msg = unsafe { CStr::from_ptr(msg) }.to_str().unwrap().to_owned();
-    info!(
-        libevdi_unknown_level = true,
-        wraps = msg.as_str(),
-        "libevdi: {}",
-        msg
-    );
+    info!(libevdi_unknown_level = true, "libevdi: {}", msg);
 }
 
 const MOD_VERSION_FILE: &str = "/sys/devices/evdi/version";
@@ -226,6 +211,8 @@ impl LibVersion {
     #[instrument]
     pub fn get() -> Self {
         let sys = unsafe {
+            ensure_logs_setup();
+
             let mut out = ffi::evdi_lib_version {
                 version_major: -1,
                 version_minor: -1,

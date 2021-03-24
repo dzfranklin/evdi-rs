@@ -10,8 +10,8 @@ use regex::Regex;
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::ffi;
 use crate::prelude::*;
+use crate::{ensure_logs_setup, ffi};
 
 const DEVICE_CARDS_DIR: &str = "/dev/dri";
 const REMOVE_ALL_FILE: &str = "/sys/devices/evdi/remove_all";
@@ -23,6 +23,9 @@ pub struct DeviceNode {
 }
 
 impl DeviceNode {
+    // NOTE: This contains the main entrypoints.
+    // We must ensure we setup logs before we call any ffi.
+
     /// Returns an evdi device node if one is available.
     ///
     /// If no device is available you will need to run Device::add() with superuser permissions.
@@ -36,6 +39,7 @@ impl DeviceNode {
 
     /// Check if a device node is an evdi device node, is a different device node, or doesn't exist.
     pub fn status(&self) -> DeviceNodeStatus {
+        ensure_logs_setup();
         let sys = unsafe { ffi::evdi_check_device(self.id) };
         DeviceNodeStatus::from(sys)
     }
@@ -45,6 +49,8 @@ impl DeviceNode {
     /// Returns None if we fail to open the device, which may be because the device isn't an evdi
     /// device node.
     pub fn open(&self) -> Result<UnconnectedHandle, OpenDeviceError> {
+        ensure_logs_setup();
+
         // NOTE: Opening invalid devices can be very slow (~10sec on my laptop), so we check first
         match self.status() {
             DeviceNodeStatus::Unrecognized => Err(OpenDeviceError::NotEvdiDevice),
@@ -98,6 +104,7 @@ impl DeviceNode {
     /// **Requires superuser permissions.**
     #[instrument]
     pub fn add() -> bool {
+        ensure_logs_setup();
         let status = unsafe { ffi::evdi_add_device() };
         status > 0
     }
