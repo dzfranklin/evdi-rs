@@ -191,6 +191,12 @@ pub struct Mode {
     pub pixel_format: Result<DrmFormat, UnrecognizedFourcc>,
 }
 
+impl Mode {
+    pub fn stride(&self) -> u32 {
+        self.bits_per_pixel / 8 * self.width
+    }
+}
+
 impl From<ffi::evdi_mode> for Mode {
     fn from(sys: ffi::evdi_mode) -> Self {
         Self {

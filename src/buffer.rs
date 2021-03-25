@@ -191,7 +191,7 @@ impl Buffer {
         let width = mode.width as usize;
         let height = mode.height as usize;
         let bits_per_pixel = mode.bits_per_pixel as usize;
-        let stride = bits_per_pixel / 8 * width;
+        let stride = mode.stride() as usize;
 
         // NOTE: We use a boxed slice to prevent accidental re-allocation
         let buffer = vec![0u8; height * stride].into_boxed_slice();
