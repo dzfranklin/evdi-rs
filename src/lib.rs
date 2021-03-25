@@ -59,7 +59,7 @@
 //! # });
 //! ```
 //!
-//! # Managing device nodes
+//! ## Managing device nodes
 //! Creating and removing device nodes requires superuser permissions.
 //!
 //! I include the helper binaries `evdi_device_add` and `evdi_device_remove_all` that do nothing but
