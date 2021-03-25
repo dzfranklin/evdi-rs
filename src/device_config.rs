@@ -5,6 +5,11 @@ use derivative::Derivative;
 /// Describes a virtual display to output to. The EDID must match width_pixels and height_pixels.
 #[derive(Derivative)]
 #[derivative(Debug, Clone)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde_crate::Serialize, serde_crate::Deserialize),
+    serde(crate = "serde_crate")
+)]
 pub struct DeviceConfig {
     #[derivative(Debug = "ignore")]
     edid: Vec<u8>,

@@ -151,6 +151,11 @@ pub(crate) enum Event {
 }
 
 #[derive(Debug, Copy, Clone)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde_crate::Serialize, serde_crate::Deserialize),
+    serde(crate = "serde_crate")
+)]
 pub enum DpmsMode {
     // Values from <https://displaylink.github.io/evdi/details/#dpms-mode-change>
     On = 0,
@@ -172,6 +177,11 @@ impl From<c_int> for DpmsMode {
 }
 
 #[derive(Debug, Copy, Clone)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde_crate::Serialize, serde_crate::Deserialize),
+    serde(crate = "serde_crate")
+)]
 pub struct Mode {
     pub width: u32,
     pub height: u32,
@@ -197,6 +207,11 @@ impl From<ffi::evdi_mode> for Mode {
 ///
 /// [u-doc]: https://displaylink.github.io/evdi/details/#crtc-state-change
 #[derive(Debug, Clone)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde_crate::Serialize, serde_crate::Deserialize),
+    serde(crate = "serde_crate")
+)]
 pub struct CrtcState(pub i32);
 
 impl From<c_int> for CrtcState {
@@ -244,6 +259,11 @@ impl CursorChange {
 
 /// A cursor position change. Raised only when cursor is positioned on virtual screen.
 #[derive(Debug, Copy, Clone)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde_crate::Serialize, serde_crate::Deserialize),
+    serde(crate = "serde_crate")
+)]
 pub struct CursorMove {
     pub x: i32,
     pub y: i32,
@@ -311,7 +331,6 @@ mod tests {
     use crate::test_common::*;
 
     use super::*;
-
 
     #[ltest(atest)]
     async fn can_receive_mode() {

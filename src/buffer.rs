@@ -236,4 +236,12 @@ pub mod tests {
         let mode = handle.events.await_mode(TIMEOUT).await.unwrap();
         handle.new_buffer(&mode).sys();
     }
+
+    #[ltest]
+    fn can_convert_buffer_ids() {
+        let n: i32 = 42;
+        let i: BufferId = n.into();
+        let n2: i32 = i.into();
+        assert_eq!(n, n2);
+    }
 }

@@ -81,6 +81,10 @@
 //! Another alternative is [configuring the kernel module] to create devices when it loads.
 //!
 //! [module-params]: https://displaylink.github.io/evdi/details/#module-parameters
+//!
+//! ## Features
+//!
+//! - serde: Derive feat_serde::Serialize and feat_serde::Deserialize for types where it makes sense.
 
 use std::ffi::CStr;
 use std::fmt;
@@ -144,6 +148,11 @@ pub fn check_kernel_mod() -> KernelModStatus {
 }
 
 /// Status of the evdi kernel module
+#[cfg_attr(
+    feature = "serde",
+    derive(serde_crate::Serialize, serde_crate::Deserialize),
+    serde(crate = "serde_crate")
+)]
 pub enum KernelModStatus {
     NotInstalled,
     Outdated,
@@ -172,6 +181,11 @@ extern "C" fn logs_cb(_user_data: *mut c_void, msg: *const c_char) {
 const MOD_VERSION_FILE: &str = "/sys/devices/evdi/version";
 
 /// Version of kernel evdi module
+#[cfg_attr(
+    feature = "serde",
+    derive(serde_crate::Serialize, serde_crate::Deserialize),
+    serde(crate = "serde_crate")
+)]
 pub struct KernelModVersion {
     pub major: u32,
     pub minor: u32,
@@ -204,11 +218,18 @@ impl KernelModVersion {
 }
 
 /// Version of the userspace evdi library
+#[cfg_attr(
+    feature = "serde",
+    derive(serde_crate::Serialize, serde_crate::Deserialize),
+    serde(crate = "serde_crate")
+)]
 pub struct LibVersion {
     pub major: i32,
     pub minor: i32,
     pub patch: i32,
+    // #[serde(skip_serializing)]
     compatible_mod_major: u32,
+    // #[serde(skip_serializing)]
     compatible_mod_minor: u32,
 }
 

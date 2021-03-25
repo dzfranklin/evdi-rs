@@ -149,6 +149,11 @@ impl PartialOrd for DeviceNode {
 
 /// Status of a [`DeviceNode`]
 #[derive(Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde_crate::Serialize, serde_crate::Deserialize),
+    serde(crate = "serde_crate")
+)]
 pub enum DeviceNodeStatus {
     Available,
     Unrecognized,
