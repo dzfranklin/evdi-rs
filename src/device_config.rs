@@ -2,7 +2,7 @@
 
 use derivative::Derivative;
 
-/// Describes a virtual display to output to
+/// Describes a virtual display to output to. The EDID must match width_pixels and height_pixels.
 #[derive(Derivative)]
 #[derivative(Debug, Clone)]
 pub struct DeviceConfig {
@@ -13,9 +13,13 @@ pub struct DeviceConfig {
 }
 
 impl DeviceConfig {
-    /// A valid config that can be used in testing.
+    /// A valid config that can be used in testing that came from the monitor in my laptop.
     pub fn sample() -> Self {
-        Self::new(include_bytes!("sample_edid_1280_800"), 1280, 800)
+        Self::new(
+            include_bytes!("../sample_data/sample_edid_darp_1920_1080.bin"),
+            1920,
+            1080,
+        )
     }
 
     /// Create a config.
