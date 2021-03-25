@@ -6,3 +6,8 @@
 /dataSources.local.xml
 # Editor-based HTTP Client requests
 /httpRequests/
+
+
+# In principle we should probably include this but it has a massive amount of churn as it includes a line for every
+# # transitive dependency the builds with an out dir
+/evdi.iml
