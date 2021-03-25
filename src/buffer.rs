@@ -19,11 +19,7 @@ pub struct BufferId(i32);
 impl BufferId {
     pub(crate) fn generate() -> Self {
         let id = rand::thread_rng().gen();
-        Self::new(id)
-    }
-
-    pub fn new(id: i32) -> BufferId {
-        BufferId(id)
+        Self(id)
     }
 
     pub(crate) fn sys(&self) -> i32 {
@@ -34,6 +30,12 @@ impl BufferId {
 impl From<i32> for BufferId {
     fn from(sys: i32) -> Self {
         Self(sys)
+    }
+}
+
+impl From<BufferId> for i32 {
+    fn from(id: BufferId) -> Self {
+        id.0
     }
 }
 
