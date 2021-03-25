@@ -143,7 +143,7 @@ impl Buffer {
         Self::write_line(f, "255\n")?;
 
         for stride in self.buffer.chunks_exact(self.stride) {
-            let row = &stride[0..self.width];
+            let row = &stride[0..self.width * BGRA_DEPTH];
             for pixel in row.chunks_exact(BGRA_DEPTH) {
                 let b = pixel[0];
                 let g = pixel[1];
