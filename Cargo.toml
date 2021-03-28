@@ -16,7 +16,7 @@ serde = ["serde_crate", "drm-fourcc/serde"]
 
 [dependencies]
 evdi-sys = "0.3.0"
-drm-fourcc = "1.3.2"
+drm-fourcc = "1.3.3"
 regex = "1.4.3"
 lazy_static = "1.4.0"
 thiserror = "1.0.24"
@@ -48,4 +48,3 @@ anyhow = "1.0.38"
 [patch.crates-io]
 # trace-pretty won't be upstreamed. Since this is only a test dependency, I don't expect that to be an issue
 test-env-log = { git = "https://github.com/danielzfranklin/test-env-log", features = ["trace-pretty"] }
-drm-fourcc = { path = "../drm-fourcc" }
