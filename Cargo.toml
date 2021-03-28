@@ -38,7 +38,7 @@ features = ["derive"]
 tokio-test = "0.4.1"
 tokio = { version = "1.3.0", features = ["full"] }
 use = "0.0.0"
-test-env-log = { version = "0.2.5", features = ["trace-pretty"] }
+test-env-log = { version = "0.2.6" }
 env_logger = "0.8.3"
 logtest = "2.0.0"
 tracing-flame = "0.1.0"
