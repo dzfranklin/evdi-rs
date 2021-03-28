@@ -93,7 +93,7 @@ use std::io::Read;
 use std::option::NoneError;
 use std::os::raw::{c_char, c_void};
 
-pub use drm_fourcc::DrmFormat;
+pub use drm_fourcc::{DrmFormat, UnrecognizedFourcc};
 pub use evdi_sys as ffi;
 use lazy_static::lazy_static;
 use regex::Regex;
