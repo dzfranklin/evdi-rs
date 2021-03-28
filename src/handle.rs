@@ -27,11 +27,11 @@ impl UnconnectedHandle {
     /// ```
     /// # use evdi::prelude::*;
     /// # use std::time::Duration;
-    /// use evdi::handle::HandleConnectError;
+    /// # use evdi::handle::HandleConnectError;
     /// # tokio_test::block_on(async {
     /// let device: DeviceNode = DeviceNode::get().unwrap();
     /// let handle = device
-    ///     .open().unwrap()
+    ///     .open()?
     ///     .connect(&DeviceConfig::sample());
     /// # Ok::<(), HandleConnectError>(())
     /// # });
