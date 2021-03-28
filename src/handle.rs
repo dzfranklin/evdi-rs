@@ -17,6 +17,7 @@ use derivative::Derivative;
 /// Represents a handle that is open but not connected.
 #[derive(Debug)]
 pub struct UnconnectedHandle {
+    device: DeviceNode,
     handle: evdi_handle,
 }
 
@@ -54,16 +55,17 @@ impl UnconnectedHandle {
         }
 
         let sys = self.handle;
+        let device = self.device.clone();
 
         // Avoid running the destructor, which would close the underlying handle
         // Since we are stack-allocated we still get cleaned up
         forget(self);
 
-        Handle::new(sys, config)
+        Handle::new(device, sys, config)
     }
 
-    pub(crate) fn new(handle: evdi_handle) -> Self {
-        Self { handle }
+    pub(crate) fn new(device: DeviceNode, handle: evdi_handle) -> Self {
+        Self { handle, device }
     }
 }
 
@@ -85,6 +87,7 @@ pub enum HandleConnectError {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Handle {
+    device: DeviceNode,
     sys: evdi_handle,
     device_config: DeviceConfig,
     buffers: HashMap<BufferId, Buffer>,
@@ -337,6 +340,7 @@ impl Handle {
     #[instrument]
     pub fn disconnect(self) -> UnconnectedHandle {
         let sys = self.sys;
+        let device = self.device.clone();
 
         // Avoid running the destructor, which would close the underlying handle
         // Since we are stack-allocated we still get cleaned up
@@ -344,11 +348,11 @@ impl Handle {
 
         unsafe { evdi_disconnect(sys) };
 
-        UnconnectedHandle::new(sys)
+        UnconnectedHandle::new(device, sys)
     }
 
     /// Takes a handle that has just been connected
-    fn new(handle_sys: evdi_handle, device_config: &DeviceConfig) -> Self {
+    fn new(device: DeviceNode, handle_sys: evdi_handle, device_config: &DeviceConfig) -> Self {
         let (close_event_handler, close_recv) = crossbeam_channel::bounded(1);
         let (event_tx, event_recv) = mpsc::channel(16);
 
@@ -367,6 +371,7 @@ impl Handle {
         // }
 
         Self {
+            device,
             sys: handle_sys,
             device_config: device_config.to_owned(),
             buffers: HashMap::new(),

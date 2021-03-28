@@ -17,7 +17,7 @@ const DEVICE_CARDS_DIR: &str = "/dev/dri";
 const REMOVE_ALL_FILE: &str = "/sys/devices/evdi/remove_all";
 
 /// Represents a device node (`/dev/dri/card*`).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DeviceNode {
     pub(crate) id: i32,
 }
@@ -66,7 +66,7 @@ impl DeviceNode {
                 let sys = unsafe { ffi::evdi_open(self.id) };
                 if !sys.is_null() {
                     info!("Opened device {}", self.id);
-                    Ok(UnconnectedHandle::new(sys))
+                    Ok(UnconnectedHandle::new(self.clone(), sys))
                 } else {
                     Err(OpenDeviceError::Unknown)
                 }
