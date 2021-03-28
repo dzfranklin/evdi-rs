@@ -27,13 +27,12 @@ impl UnconnectedHandle {
     /// ```
     /// # use evdi::prelude::*;
     /// # use std::time::Duration;
-    /// # use evdi::handle::HandleConnectError;
     /// # tokio_test::block_on(async {
     /// let device: DeviceNode = DeviceNode::get().unwrap();
     /// let handle = device
     ///     .open()?
     ///     .connect(&DeviceConfig::sample());
-    /// # Ok::<(), HandleConnectError>(())
+    /// # Ok::<(), evdi::device_node::OpenDeviceError>(())
     /// # });
     /// ```
     #[instrument]
@@ -73,14 +72,6 @@ impl Drop for UnconnectedHandle {
     fn drop(&mut self) {
         unsafe { evdi_close(self.handle) };
     }
-}
-
-#[derive(Debug, Error)]
-pub enum HandleConnectError {
-    #[error("IO error opening ready file descriptor")]
-    Io(#[from] std::io::Error),
-    #[error("Timeout")]
-    Timeout,
 }
 
 /// Represents an evdi handle that is connected and ready.
