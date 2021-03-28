@@ -368,7 +368,6 @@ impl<T: Debug> Debug for OwnedLibcArray<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::prelude::*;
     use crate::test_common::*;
     use crate::*;
 

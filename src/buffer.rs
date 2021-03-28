@@ -190,7 +190,6 @@ impl Buffer {
     pub(crate) fn new(mode: &Mode) -> Self {
         let width = mode.width as usize;
         let height = mode.height as usize;
-        let bits_per_pixel = mode.bits_per_pixel as usize;
         let stride = mode.stride() as usize;
 
         // NOTE: We use a boxed slice to prevent accidental re-allocation
