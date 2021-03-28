@@ -22,7 +22,7 @@ pub struct UnconnectedHandle {
 }
 
 impl UnconnectedHandle {
-    /// Connect to an handle and wait until ready.
+    /// Connect to a handle.
     ///
     /// ```
     /// # use evdi::prelude::*;
