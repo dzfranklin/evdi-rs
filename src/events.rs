@@ -188,6 +188,13 @@ pub struct Mode {
     /// Max updates per second.
     pub refresh_rate: u32,
     pub bits_per_pixel: u32,
+    /// Based on the current source code of libevdi I believe this can only be
+    /// one of the formats returned by
+    /// [`drm_mode_legacy_fb_format`][legacy_fn_github], which is essentially
+    /// limited to RGB-like formats (ARGB8888, XRGB8888, RGB565, and a few
+    /// more).
+    ///
+    /// [legacy_fn_github]: https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/drm_fourcc.c#L46
     pub pixel_format: Result<DrmFormat, UnrecognizedFourcc>,
 }
 

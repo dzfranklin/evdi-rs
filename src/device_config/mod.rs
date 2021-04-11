@@ -1,6 +1,7 @@
 //! Config of virtual output display
 
 use derivative::Derivative;
+mod edid;
 
 /// Describes a virtual display to output to. The EDID must match width_pixels and height_pixels.
 #[derive(Derivative)]
@@ -39,6 +40,13 @@ impl DeviceConfig {
             height_pixels,
         }
     }
+
+    /// Create a device config with specific properties.
+    ///
+    /// This works by creating a fake [EDID][edid] with the specific properties.
+    ///
+    /// [edid]: https://en.wikipedia.org/wiki/Extended_Display_Identification_Data
+    pub fn synthetic(width_pixels: u32, height_pixels: u32) -> Self {}
 
     pub fn edid(&self) -> &[u8] {
         &self.edid
