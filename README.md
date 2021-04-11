@@ -1,4 +1,6 @@
-![Crates.io](https://img.shields.io/crates/v/evdi)
+# evdi
+
+[![Crates.io](https://img.shields.io/crates/v/evdi)](https://crates.io/crates/evdi)
 
 Safe bindings to [evdi](https://github.com/DisplayLink/evdi), a program for managing virtual
 displays on linux.
