@@ -1,6 +1,7 @@
 #![feature(with_options)]
 #![feature(try_trait)]
 #![feature(debug_non_exhaustive)]
+#![warn(clippy::cargo)]
 
 //! High-level bindings to [evdi](https://github.com/DisplayLink/evdi), a library for managing
 //! virtual displays on linux.
