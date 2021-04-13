@@ -22,7 +22,7 @@ impl DeviceConfig {
     /// A valid config that can be used in testing that came from the monitor in my laptop.
     pub fn sample() -> Self {
         Self::new(
-            include_bytes!("../sample_data/sample_edid_darp_1920_1080.bin"),
+            include_bytes!("../../sample_data/sample_edid_darp_1920_1080.bin"),
             1920,
             1080,
         )
@@ -46,7 +46,7 @@ impl DeviceConfig {
     /// This works by creating a fake [EDID][edid] with the specific properties.
     ///
     /// [edid]: https://en.wikipedia.org/wiki/Extended_Display_Identification_Data
-    pub fn synthetic(width_pixels: u32, height_pixels: u32) -> Self {}
+    // pub fn synthetic(width_pixels: u32, height_pixels: u32) -> Self {}
 
     pub fn edid(&self) -> &[u8] {
         &self.edid
