@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
-use drm_fourcc::{DrmFormat, UnrecognizedFourcc};
+use drm_fourcc::{DrmFormat, DrmFourcc, UnrecognizedFourcc};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::sleep;
@@ -195,7 +195,7 @@ pub struct Mode {
     /// more).
     ///
     /// [legacy_fn_github]: https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/drm_fourcc.c#L46
-    pub pixel_format: Result<DrmFormat, UnrecognizedFourcc>,
+    pub pixel_format: Result<DrmFourcc, UnrecognizedFourcc>,
 }
 
 impl Mode {
@@ -243,7 +243,7 @@ pub struct CursorChange {
     pub width: u32,
     pub height: u32,
     pub stride: u32,
-    pub pixel_format: Result<DrmFormat, UnrecognizedFourcc>,
+    pub pixel_format: Result<DrmFourcc, UnrecognizedFourcc>,
     buffer: Arc<OwnedLibcArray<u32>>,
 }
 
@@ -258,7 +258,7 @@ impl From<ffi::evdi_cursor_set> for CursorChange {
             width: sys.width,
             height: sys.height,
             stride: sys.stride,
-            pixel_format: DrmFormat::try_from(sys.pixel_format),
+            pixel_format: DrmFourcc::try_from(sys.pixel_format),
             buffer: Arc::new(buffer),
         }
     }
@@ -359,7 +359,7 @@ mod tests {
             height: 800,
             refresh_rate: 60,
             bits_per_pixel: 32,
-            pixel_format: Ok(DrmFormat::Xrgb8888),
+            pixel_format: Ok(DrmFourcc::Xrgb8888),
         };
 
         let actual: Mode = evdi_mode {

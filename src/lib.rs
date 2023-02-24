@@ -1,6 +1,3 @@
-#![feature(with_options)]
-#![feature(try_trait)]
-#![feature(debug_non_exhaustive)]
 #![warn(clippy::cargo)]
 
 //! High-level bindings to [evdi](https://github.com/DisplayLink/evdi), a library for managing
@@ -91,7 +88,6 @@ use std::ffi::CStr;
 use std::fmt;
 use std::fs::File;
 use std::io::Read;
-use std::option::NoneError;
 use std::os::raw::{c_char, c_void};
 
 pub use drm_fourcc::{DrmFormat, UnrecognizedFourcc};
@@ -200,15 +196,15 @@ impl KernelModVersion {
             static ref RE: Regex =
                 Regex::new(r"(?P<maj>[0-9]+)\.(?P<min>[0-9]+)\.(?P<pat>[0-9]+)").unwrap();
         }
-        let mut file = File::open(MOD_VERSION_FILE).map_err(|_| NoneError)?;
+        let mut file = File::open(MOD_VERSION_FILE).ok()?;
         let mut contents = String::new();
-        file.read_to_string(&mut contents).map_err(|_| NoneError)?;
+        file.read_to_string(&mut contents).ok()?;
 
         let caps = RE.captures(&contents)?;
 
-        let major = caps.name("maj")?.as_str().parse().map_err(|_| NoneError)?;
-        let minor = caps.name("min")?.as_str().parse().map_err(|_| NoneError)?;
-        let patch = caps.name("pat")?.as_str().parse().map_err(|_| NoneError)?;
+        let major = caps.name("maj")?.as_str().parse().ok()?;
+        let minor = caps.name("min")?.as_str().parse().ok()?;
+        let patch = caps.name("pat")?.as_str().parse().ok()?;
 
         Some(Self {
             major,

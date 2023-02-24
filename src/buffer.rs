@@ -7,7 +7,7 @@ use std::io::Write;
 use std::os::raw::{c_int, c_void};
 
 use derivative::Derivative;
-use drm_fourcc::UnrecognizedFourcc;
+use drm_fourcc::{DrmFourcc, UnrecognizedFourcc};
 use rand::Rng;
 
 use crate::prelude::*;
@@ -81,7 +81,7 @@ pub struct Buffer {
     pub width: usize,
     pub height: usize,
     pub stride: usize,
-    pub pixel_format: Result<DrmFormat, UnrecognizedFourcc>,
+    pub pixel_format: Result<DrmFourcc, UnrecognizedFourcc>,
 }
 
 /// Can't have more than 16
@@ -136,7 +136,7 @@ impl Buffer {
     pub fn debug_write_to_ppm(&self, f: &mut File) -> io::Result<()> {
         assert_eq!(
             self.pixel_format.expect("Unrecognized pixel format"),
-            DrmFormat::Xrgb8888,
+            DrmFourcc::Xrgb8888,
             "Only xbgr8888 pixel format supported by debug_write_to_ppm"
         );
         Self::write_line(f, "P6\n")?;

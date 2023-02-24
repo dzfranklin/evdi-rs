@@ -121,7 +121,7 @@ impl DeviceNode {
     /// **Requires superuser permissions.**
     #[instrument]
     pub fn remove_all() -> io::Result<()> {
-        let mut f = File::with_options().write(true).open(REMOVE_ALL_FILE)?;
+        let mut f = File::options().write(true).open(REMOVE_ALL_FILE)?;
         f.write_all("1".as_ref())?;
         f.flush()?;
         Ok(())
