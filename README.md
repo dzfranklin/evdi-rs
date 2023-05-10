@@ -1,3 +1,7 @@
+## Archived
+
+I abandoned the project I built this for, and am no longer actively working on it.
+
 # evdi
 
 [![Crates.io](https://img.shields.io/crates/v/evdi)](https://crates.io/crates/evdi)
